@@ -1,0 +1,13 @@
+# Maestro flow for the MLITech customer app. Rename to customer-login.yaml to turn it on.
+# Run locally first:  maestro test qa-mobile/customer-login.yaml -e APP_ID=<package> -e CUSTOMER_ID=... -e CUSTOMER_PASSWORD=...
+# The labels below must exist as Semantics labels (or visible text) in the Flutter widgets.
+appId: ${APP_ID}
+---
+- launchApp:
+    clearState: true
+- tapOn: "Email or phone"
+- inputText: ${CUSTOMER_ID}
+- tapOn: "Password"
+- inputText: ${CUSTOMER_PASSWORD}
+- tapOn: "Log in"
+- assertVisible: "Rewards"

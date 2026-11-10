@@ -1,0 +1,92 @@
+# The QA agent and platform test themselves on every push:
+#   engine    boots the fixture API (planted bugs): every bug found, no false positives
+#   action    the GitHub Action, both simulated (test:action) and for real (uses: ./)
+#   platform  API tests (tenant isolation, roles, vault, runner, hosted jobs), the hosted runner
+#             end to end, and dashboard browser tests
+name: QA agent self-test
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx playwright install --with-deps chromium
+      - run: pipx install schemathesis
+      - run: npm run selftest
+        env:
+          SELFTEST_FUZZ: "1"
+      - run: npm run test:action
+
+  action:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev --workspaces=false
+      - name: Start the fixture API (planted bugs)
+        run: |
+          PORT=4010 CLIENT_URL=http://localhost:5173 nohup node --import tsx test/fixture-api/src/server.ts > fixture.log 2>&1 &
+          npm run -s qa -- wait-for --url http://127.0.0.1:4010 --timeout 60
+      - name: Run this repository's action
+        id: qa
+        uses: ./
+        with:
+          suite: pr
+          config: test/fixture.config.ts
+          base-url: http://127.0.0.1:4010
+          changed-from: ""
+          fail-on-gate: "false"
+          comment: ${{ github.event_name == 'pull_request' }}
+      - name: The planted bugs must fail the gate
+        env:
+          CODE: ${{ steps.qa.outputs.exit-code }}
+          BLOCKING: ${{ steps.qa.outputs.blocking }}
+        run: |
+          echo "exit-code=$CODE blocking=$BLOCKING"
+          test "$CODE" = "1"
+          test "$BLOCKING" -gt 0
+
+  platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run api:test
+      - run: npm run runner:test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run dashboard:build
+      - run: npm run dashboard:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dashboard-e2e-report
+          path: apps/dashboard/e2e-report
+          retention-days: 7

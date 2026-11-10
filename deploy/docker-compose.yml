@@ -1,0 +1,102 @@
+# QA platform: production stack on one server.
+#   cp .env.example .env    # fill in every value (see README.md)
+#   docker compose up -d --build
+#   docker compose --profile hosted up -d    # also start a hosted runner
+#
+# Services: postgres → migrate (one-shot, as the schema owner) → api (as qa_app)
+#           → dashboard (nginx: static files + /api proxy) → caddy (HTTPS)
+name: qa-platform
+
+x-api-env: &api-env
+  NODE_ENV: production
+  TRUST_PROXY: 2   # caddy → nginx → api
+  DATABASE_URL: postgres://qa_app:${QA_APP_PASSWORD}@postgres:5432/qa_platform
+  MIGRATION_DATABASE_URL: postgres://qa_owner:${POSTGRES_PASSWORD}@postgres:5432/qa_platform
+  JWT_SECRET: ${JWT_SECRET}
+  VAULT_MASTER_KEY: ${VAULT_MASTER_KEY}
+  APP_URL: https://${DOMAIN}
+  CORS_ORIGINS: https://${DOMAIN}
+  SIGNUP_MODE: ${SIGNUP_MODE:-invite}
+  RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+  SMTP_URL: ${SMTP_URL:-}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  MAIL_FROM: ${MAIL_FROM:-QA Platform <qa@localhost>}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qa_platform
+      POSTGRES_USER: qa_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      QA_APP_PASSWORD: ${QA_APP_PASSWORD:?set QA_APP_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/01-app-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qa_owner -d qa_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build: { context: .., dockerfile: deploy/Dockerfile, target: api }
+    image: qa-platform-api
+    command: ["node", "--import", "tsx", "apps/api/src/db/migrate-cli.ts"]
+    environment:
+      <<: *api-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    image: qa-platform-api
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: dashboard
+      args:
+        VITE_OPERATOR_NAME: ${OPERATOR_NAME:-}
+        VITE_CONTACT_EMAIL: ${CONTACT_EMAIL:-}
+    image: qa-platform-dashboard
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: api:4100
+    depends_on: [api]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [dashboard]
+
+  runner:
+    profiles: ["hosted"]
+    build: { context: .., dockerfile: deploy/Dockerfile, target: runner }
+    image: qa-platform-runner
+    restart: unless-stopped
+    environment:
+      QA_PLATFORM_URL: http://api:4100
+      QA_RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env for hosted runs}
+      QA_RUNNER_ID: runner-1
+    shm_size: 1gb
+    depends_on: [api]
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

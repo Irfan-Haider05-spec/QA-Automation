@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# QA Agent + QA platform for any backend repository.
+# COPY THIS FILE TO: <your repo>/.github/workflows/qa.yml
+# (The dashboard's project → CI setup tab generates this file with your IDs filled in.)
+#
+#   pull_request   tests the routes the PR touches, comments on the PR,
+#                  sets a "QA gate" status
+#   push staging   waits for the new deploy, reports it to the platform, runs the
+#                  staging suite against it
+#   nightly        full nightly suite against staging
+#
+# Repository settings (Settings → Secrets and variables → Actions):
+#   Secret    QA_PLATFORM_API_KEY  project API key from the platform. Tick "can read
+#                                  test-account passwords" to use the accounts stored
+#                                  on the platform instead of CI secrets.
+#   Variable  QA_STAGING_URL       e.g. https://staging-api.example.com
+# Also commit a qa.config.ts at the repo root (the CI setup tab generates a starter).
+# ─────────────────────────────────────────────────────────────────────────────
+name: QA
+
+on:
+  pull_request:
+  push:
+    branches: [staging] # the branch that deploys to staging
+  schedule:
+    - cron: "41 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write # the PR comment
+  statuses: write # the "QA gate" commit status
+
+env:
+  QA_PLATFORM_URL: https://qa.example.com
+  QA_PLATFORM_ENV: 00000000-0000-0000-0000-000000000000 # staging environment ID
+
+jobs:
+  pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the PR diff needs the base branch
+
+      # Static checks run on the code alone. To also test this PR's backend live,
+      # start it here (database service + npm start) and set base-url below.
+
+      - uses: your-org/qa-agent@v1
+        with:
+          suite: pr
+          platform-url: ${{ env.QA_PLATFORM_URL }}
+          platform-api-key: ${{ secrets.QA_PLATFORM_API_KEY }}
+
+  staging:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Test accounts usually allow one session at a time: never run two staging jobs at once
+    concurrency:
+      group: qa-staging
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: your-org/qa-agent@v1
+        with:
+          suite: ${{ github.event_name == 'schedule' && 'nightly' || 'staging' }}
+          base-url: ${{ vars.QA_STAGING_URL }}
+          wait-for-deploy: ${{ github.event_name == 'push' }}
+          after-deploy: ${{ github.event_name == 'push' }}
+          platform-url: ${{ env.QA_PLATFORM_URL }}
+          platform-api-key: ${{ secrets.QA_PLATFORM_API_KEY }}
+          platform-environment: ${{ env.QA_PLATFORM_ENV }}
+          platform-accounts: "true"

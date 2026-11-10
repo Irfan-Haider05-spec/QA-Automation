@@ -1,0 +1,9 @@
+appId: ${APP_ID}
+---
+- launchApp
+- tapOn: "Email"
+- inputText: ${EMAIL}
+- tapOn: "Password"
+- inputText: ${PASSWORD}
+- tapOn: "Log in"
+- assertVisible: "Home"

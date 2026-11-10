@@ -1,0 +1,8 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Heavy report</title><link rel="stylesheet" href="/web/theme.css"><script src="/web/app.js"></script></head>
+<body><nav id="nav"></nav><main><h1>Heavy report</h1><p id="out">Crunching numbers in the browser…</p>
+<!-- planted: blocks the main thread for ~2.5 s after load (long tasks → high Total Blocking Time) -->
+<script>
+function crunch(){var t=Date.now();while(Date.now()-t<500){}}
+for (var i=0;i<5;i++) setTimeout(crunch, 50+i*20);
+setTimeout(function(){document.getElementById("out").textContent="Done";}, 200);
+</script></main></body></html>

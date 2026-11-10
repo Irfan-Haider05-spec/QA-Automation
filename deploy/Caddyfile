@@ -1,0 +1,6 @@
+# Automatic HTTPS (Let's Encrypt) for the platform. Point DOMAIN's DNS A record at this server first.
+{$DOMAIN} {
+  encode zstd gzip
+  header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  reverse_proxy dashboard:8080
+}

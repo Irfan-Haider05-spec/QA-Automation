@@ -1,0 +1,88 @@
+# API on your own server, dashboard on Cloudflare Pages (or Vercel).
+#   cp .env.example .env     # fill in; set API_DOMAIN and DASHBOARD_URL too
+#   docker compose -f docker-compose.api.yml up -d --build
+#   docker compose -f docker-compose.api.yml --profile hosted up -d   # + hosted runner
+#
+# postgres → migrate (one-shot, schema owner) → api (as qa_app) → caddy (HTTPS for API_DOMAIN)
+name: qa-platform
+
+x-api-env: &api-env
+  NODE_ENV: production
+  TRUST_PROXY: ${TRUST_PROXY:-1} # caddy → api; 2 if Cloudflare's proxy (orange cloud) is on for API_DOMAIN
+  DATABASE_URL: postgres://qa_app:${QA_APP_PASSWORD}@postgres:5432/qa_platform
+  MIGRATION_DATABASE_URL: postgres://qa_owner:${POSTGRES_PASSWORD}@postgres:5432/qa_platform
+  JWT_SECRET: ${JWT_SECRET}
+  VAULT_MASTER_KEY: ${VAULT_MASTER_KEY}
+  # Links in emails and report share links point at the dashboard
+  APP_URL: ${DASHBOARD_URL:?set DASHBOARD_URL in .env (e.g. https://qa.example.com)}
+  CORS_ORIGINS: ${DASHBOARD_URL}
+  SIGNUP_MODE: ${SIGNUP_MODE:-invite}
+  RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+  SMTP_URL: ${SMTP_URL:-}
+  MAIL_FROM: ${MAIL_FROM:-QA Platform <qa@localhost>}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: qa_platform
+      POSTGRES_USER: qa_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      QA_APP_PASSWORD: ${QA_APP_PASSWORD:?set QA_APP_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/01-app-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qa_owner -d qa_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build: { context: .., dockerfile: deploy/Dockerfile, target: api }
+    image: qa-platform-api
+    command: ["node", "--import", "tsx", "apps/api/src/db/migrate-cli.ts"]
+    environment:
+      <<: *api-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    image: qa-platform-api
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env (e.g. api.qa.example.com)}
+    volumes:
+      - ./Caddyfile.api:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+
+  runner:
+    profiles: ["hosted"]
+    build: { context: .., dockerfile: deploy/Dockerfile, target: runner }
+    image: qa-platform-runner
+    restart: unless-stopped
+    environment:
+      QA_PLATFORM_URL: http://api:4100
+      QA_RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env for hosted runs}
+      QA_RUNNER_ID: runner-1
+    shm_size: 1gb
+    depends_on: [api]
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

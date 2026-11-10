@@ -1,0 +1,15 @@
+// Example business flow for the MLITech business dashboard.
+// Rename to view-promotions.ts to turn it on, and adjust the labels to the real screens.
+// Record clicks with:  npx playwright codegen https://<staging business dashboard>
+// Flows that change data need `writes: true` (the default) and only run on throwaway data.
+export default {
+  name: "Merchant views promotions",
+  app: "business", // logs in with merchantA (web.apps in qa.config.ts)
+  writes: false,
+  async run({ page, step, see }: any) {
+    await step("Open promotions", () => page.goto("/promotions"));
+    await see(/Promotions/i);
+    await step("Open the first promotion", () => page.getByRole("row").nth(1).click());
+    await see(/Details|Edit/i);
+  },
+};

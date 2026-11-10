@@ -1,0 +1,9 @@
+{
+  "name": "@qa/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Types and zod schemas shared by the engine, the platform API and the dashboard",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "zod": "^3.23.8" }
+}

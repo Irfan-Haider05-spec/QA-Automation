@@ -1,0 +1,15 @@
+{
+  "name": "@qa/runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Hosted runner: claims jobs from the QA platform and runs the QA engine against verified environments",
+  "scripts": {
+    "start": "node --import tsx src/main.ts",
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@qa/shared": "*"
+  }
+}

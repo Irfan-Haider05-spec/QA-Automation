@@ -1,0 +1,2 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Dashboard</title><link rel="stylesheet" href="/web/theme.css"><script src="/web/app.js"></script></head>
+<body><nav id="nav"></nav><main><h1>Dashboard</h1><p>Welcome back. Your loyalty programme at a glance.</p><ul><li>Active promotions: <b id="n">…</b></li></ul><script>api("/promotion").then(function(j){document.getElementById("n").textContent=j.data.length;});</script></main></body></html>

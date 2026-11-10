@@ -1,0 +1,166 @@
+name: QA Agent
+description: Plugin-based QA for APIs and dashboards. Runs a suite, comments on the PR, sets a "QA gate" commit status and sends the run to the QA platform.
+author: QA Platform
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  suite:
+    description: Suite from your config to run (pr, staging, nightly, local)
+    default: pr
+  config:
+    description: Path to your QA config, relative to the repository root
+    default: qa.config.ts
+  backend-dir:
+    description: Backend source folder relative to the repository root. Empty = backend.dir from your config (relative to the config file)
+    default: ""
+  base-url:
+    description: URL of the running backend to test live. Empty = only static checks (or the URL in your config)
+    default: ""
+  changed-from:
+    description: Git ref to diff against so a PR only tests the routes it touches. "auto" = the PR's base branch; empty = all routes
+    default: auto
+  platform-url:
+    description: QA platform URL, e.g. https://qa.example.com. Empty = don't upload
+    default: ""
+  platform-api-key:
+    description: Project API key from the platform (store it as a secret)
+    default: ""
+  platform-environment:
+    description: Environment ID from the platform (shown on the project's Environments tab)
+    default: ""
+  platform-accounts:
+    description: Take test-account logins from the platform instead of CI secrets (the key needs "read test-account passwords")
+    default: "false"
+  after-deploy:
+    description: This run checks a fresh deployment; report it to the platform and link the run to it
+    default: "false"
+  deploy-version:
+    description: Version label of the deployment, e.g. a tag. Default is the commit
+    default: ""
+  wait-for-deploy:
+    description: Before testing, wait until base-url serves a process that started after this job did
+    default: "false"
+  wait-timeout:
+    description: Seconds to wait for the deployment
+    default: "1200"
+  health-path:
+    description: Health endpoint used by wait-for-deploy
+    default: /health
+  comment:
+    description: Post (and keep updating) one comment on the pull request
+    default: "true"
+  commit-status:
+    description: Set a "QA gate" commit status that links to the run
+    default: "true"
+  fail-on-gate:
+    description: Fail this step when the quality gate fails (new findings at or above the config's gate level)
+    default: "true"
+  install-browser:
+    description: Install Chromium for the dashboard checks (web-crawl, web-a11y, web-visual)
+    default: "false"
+  install-schemathesis:
+    description: Install Schemathesis for the fuzz plugin
+    default: "false"
+  upload-report:
+    description: Keep the HTML/JSON report as a workflow artifact
+    default: "true"
+  github-token:
+    description: Token for the PR comment and commit status
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: 0 gate passed · 1 gate failed · 2 configuration error · 3 target unreachable
+    value: ${{ steps.qa.outputs.code }}
+  gate-passed:
+    description: Whether the quality gate passed (true or false)
+    value: ${{ steps.qa.outputs.gate-passed }}
+  blocking:
+    description: Number of new findings at or above the gate level
+    value: ${{ steps.qa.outputs.blocking }}
+  run-url:
+    description: Link to the run on the QA platform (when uploaded and the platform has APP_URL set)
+    value: ${{ steps.qa.outputs.run-url }}
+  report-dir:
+    description: Folder with report.html, report.json and summary.md
+    value: ${{ steps.qa.outputs.report-dir }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+
+    - name: Install QA agent
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --omit=dev --workspaces=false --no-audit --no-fund
+
+    - name: Install Chromium
+      if: inputs.install-browser == 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npx playwright install --with-deps chromium
+
+    - name: Install Schemathesis
+      if: inputs.install-schemathesis == 'true'
+      shell: bash
+      run: pipx install schemathesis
+
+    - name: Wait for the deployment
+      if: inputs.wait-for-deploy == 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        BASE_URL: ${{ inputs.base-url }}
+        HEALTH_PATH: ${{ inputs.health-path }}
+        WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+      run: |
+        if [ -z "$BASE_URL" ]; then echo "::error title=QA Agent::wait-for-deploy needs base-url"; exit 2; fi
+        node --import tsx src/cli.ts wait-for --url "$BASE_URL" --path "$HEALTH_PATH" --fresh --timeout "$WAIT_TIMEOUT"
+
+    - name: Run QA agent
+      id: qa
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        SUITE: ${{ inputs.suite }}
+        CONFIG: ${{ inputs.config }}
+        BACKEND_DIR: ${{ inputs.backend-dir }}
+        BASE_URL: ${{ inputs.base-url }}
+        CHANGED_FROM: ${{ inputs.changed-from }}
+        QA_PLATFORM_URL: ${{ inputs.platform-url }}
+        QA_PLATFORM_API_KEY: ${{ inputs.platform-api-key }}
+        QA_PLATFORM_ENV: ${{ inputs.platform-environment }}
+        PLATFORM_ACCOUNTS: ${{ inputs.platform-accounts }}
+        AFTER_DEPLOY: ${{ inputs.after-deploy }}
+        QA_DEPLOY_VERSION: ${{ inputs.deploy-version }}
+        QA_GITHUB_COMMENT: ${{ inputs.comment }}
+        QA_GITHUB_STATUS: ${{ inputs.commit-status }}
+        QA_GITHUB_TOKEN: ${{ inputs.github-token }}
+        OUT_DIR: ${{ github.workspace }}/qa-out
+      run: bash "$GITHUB_ACTION_PATH/action/run.sh"
+
+    - name: Keep the report
+      if: always() && inputs.upload-report == 'true' && steps.qa.outputs.report-dir != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: qa-report-${{ inputs.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ steps.qa.outputs.report-dir }}
+        retention-days: 14
+
+    - name: Quality gate
+      if: inputs.fail-on-gate == 'true' && steps.qa.outputs.code != '0'
+      shell: bash
+      env:
+        CODE: ${{ steps.qa.outputs.code }}
+      run: |
+        case "$CODE" in
+          1) echo "::error title=QA gate failed::New findings at or above the gate level. See the job summary or the qa-report artifact." ;;
+          3) echo "::error title=QA target unreachable::The backend under test didn't answer its health check." ;;
+          *) echo "::error title=QA Agent error::The agent stopped with exit code ${CODE:-unknown} (configuration or usage problem). See the 'Run QA agent' step log." ;;
+        esac
+        exit 1

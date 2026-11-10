@@ -1,0 +1,9 @@
+# API only (dashboard hosted on Cloudflare Pages / Vercel). HTTPS certificate from Let's Encrypt.
+{$API_DOMAIN} {
+  encode gzip
+  reverse_proxy api:4100
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    -Server
+  }
+}

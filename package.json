@@ -1,0 +1,62 @@
+{
+  "name": "mlitech-qa-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plugin-first QA agent for the MLITech backend. Zero LLM calls at run time.",
+  "type": "module",
+  "bin": {
+    "qa": "./bin/qa.mjs"
+  },
+  "scripts": {
+    "qa": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "fixture": "tsx test/fixture-api/src/server.ts",
+    "selftest": "tsx test/selftest.ts",
+    "api:dev": "npm run dev -w @qa/api",
+    "api:migrate": "npm run migrate -w @qa/api",
+    "api:test": "npm test -w @qa/api",
+    "test:all": "npm run typecheck && npm run selftest && npm run test:action && npm run api:test && npm run runner:test && npm run dashboard:build && npm run dashboard:e2e",
+    "dashboard:dev": "npm run dev -w @qa/dashboard",
+    "dashboard:build": "npm run build -w @qa/dashboard",
+    "dashboard:e2e": "npm run e2e -w @qa/dashboard",
+    "dashboard:dogfood": "npm run dogfood -w @qa/dashboard",
+    "test:action": "tsx test/action-sim.ts",
+    "runner:start": "npm start -w @qa/runner",
+    "runner:test": "npm test -w @qa/runner"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "bcryptjs": "^2.4.3",
+    "lighthouse": "^13.6.0",
+    "mongodb": "^6.10.0",
+    "picomatch": "^4.0.2",
+    "pixelmatch": "^7.1.0",
+    "playwright": "^1.63.0",
+    "pngjs": "^7.0.0",
+    "socket.io-client": "^4.8.4",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.9.0",
+    "@types/picomatch": "^3.0.1",
+    "@types/pngjs": "^6.0.5",
+    "express": "^4.21.1",
+    "socket.io": "^4.8.4",
+    "yaml": "^2.9.1",
+    "zod": "^3.23.8"
+  },
+  "overrides": {
+    "playwright-core": "1.63.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

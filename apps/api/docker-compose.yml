@@ -1,0 +1,18 @@
+# Local PostgreSQL for the platform API (optional: without it the API uses embedded PGlite).
+#   docker compose up -d
+# Two roles, as in production:
+#   qa_owner → owns the schema, runs migrations           (MIGRATION_DATABASE_URL)
+#   qa_app   → what the API connects as; subject to RLS    (DATABASE_URL)
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: qa_platform
+      POSTGRES_USER: qa_owner
+      POSTGRES_PASSWORD: qa_owner_dev_only
+    ports: ["5432:5432"]
+    volumes:
+      - qa_pgdata:/var/lib/postgresql/data
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+volumes:
+  qa_pgdata:

@@ -1,0 +1,70 @@
+# Database on Supabase, API (+ hosted runner) on your server, dashboard on Cloudflare Pages.
+# Step-by-step: deploy/SETUP-GUIDE.md
+#   cp .env.supabase.example .env    # fill in
+#   docker compose -f docker-compose.supabase.yml up -d --build
+#   docker compose -f docker-compose.supabase.yml --profile hosted up -d     # + hosted runner
+name: qa-platform
+
+x-api-env: &api-env
+  NODE_ENV: production
+  TRUST_PROXY: ${TRUST_PROXY:-1} # caddy → api; 2 if Cloudflare's proxy (orange cloud) is on for API_DOMAIN
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL (qa_app via the Supabase session pooler) in .env}
+  MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?set MIGRATION_DATABASE_URL (qa_owner via the Supabase session pooler) in .env}
+  JWT_SECRET: ${JWT_SECRET}
+  VAULT_MASTER_KEY: ${VAULT_MASTER_KEY}
+  APP_URL: ${DASHBOARD_URL:?set DASHBOARD_URL in .env}
+  CORS_ORIGINS: ${DASHBOARD_URL}
+  SIGNUP_MODE: ${SIGNUP_MODE:-invite}
+  RUNNER_TOKEN: ${RUNNER_TOKEN:-}
+  SMTP_URL: ${SMTP_URL:-}
+  MAIL_FROM: ${MAIL_FROM:-QA Platform <qa@localhost>}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+
+services:
+  migrate:
+    build: { context: .., dockerfile: deploy/Dockerfile, target: api }
+    image: qa-platform-api
+    command: ["node", "--import", "tsx", "apps/api/src/db/migrate-cli.ts"]
+    environment:
+      <<: *api-env
+    volumes:
+      - ./certs:/certs:ro # supabase-ca.crt (Supabase → Database settings → SSL → Download certificate)
+    restart: "no"
+
+  api:
+    image: qa-platform-api
+    restart: unless-stopped
+    environment:
+      <<: *api-env
+    volumes:
+      - ./certs:/certs:ro
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile.api:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+
+  runner:
+    profiles: ["hosted"]
+    build: { context: .., dockerfile: deploy/Dockerfile, target: runner }
+    image: qa-platform-runner
+    restart: unless-stopped
+    environment:
+      QA_PLATFORM_URL: http://api:4100
+      QA_RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env for hosted runs}
+      QA_RUNNER_ID: runner-1
+    shm_size: 1gb
+    depends_on: [api]
+
+volumes:
+  caddy_data:
+  caddy_config:

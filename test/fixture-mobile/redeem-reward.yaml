@@ -1,0 +1,6 @@
+appId: ${APP_ID}
+---
+- launchApp
+- tapOn: "Rewards"
+- tapOn: "Redeem"
+- assertVisible: "Reward redeemed"

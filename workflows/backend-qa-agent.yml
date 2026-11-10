@@ -1,0 +1,269 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# QA agent for the MLITech backend.
+# COPY THIS FILE TO: Loyalty-Backend-Code/.github/workflows/qa-agent.yml
+#
+#   pull_request → boots this PR's backend against a throwaway MongoDB + Redis,
+#                  seeds QA accounts, runs the "pr" suite on the routes the PR touches
+#   push staging → waits for the new Render deploy, runs the "staging" suite
+#   nightly      → full "nightly" suite against staging, including fuzzing
+#
+# Repo settings needed (Settings → Secrets and variables → Actions):
+#   Variables: QA_AGENT_REPO   e.g. tmhdigital/qa-agent
+#              QA_STAGING_URL  e.g. https://rewaldo-staging.onrender.com
+#              QA_CORS_ORIGINS e.g. https://staging-admin.example.com,https://staging-business.example.com
+#              QA_ADMIN_WEB_URL, QA_BUSINESS_WEB_URL  staging dashboard URLs (Phase 2; leave unset to skip)
+#              QA_ADMIN_WEB_LOGIN, QA_BUSINESS_WEB_LOGIN  login paths if not /login
+#   Secrets:   QA_AGENT_TOKEN  read-only fine-grained PAT for the qa-agent repo (only if it is private)
+#              QA_MERCHANT_A_ID / QA_MERCHANT_A_PASS, QA_MERCHANT_B_ID / QA_MERCHANT_B_PASS,
+#              QA_CUSTOMER_ID / QA_CUSTOMER_PASS, QA_ADMIN_ID / QA_ADMIN_PASS
+#              (dedicated STAGING accounts, see qa-agent README)
+# ─────────────────────────────────────────────────────────────────────────────
+name: QA agent
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+  push:
+    branches: [staging] # the branch Render deploys to staging; change if yours differs
+  schedule:
+    - cron: "41 21 * * *" # 02:41 Pakistan time
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Suite to run against staging
+        type: choice
+        options: [staging, nightly]
+        default: staging
+      update_visual:
+        description: Approve current dashboard screenshots as the new visual baselines
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  # ───────────────────────────── PR: throwaway backend ─────────────────────────
+  pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      # Throwaway values: this database lives only for this job.
+      PORT: "5004"
+      NODE_ENV: production
+      DATABASE_URL: mongodb://localhost:27017/mlitech_qa?replicaSet=rs0&directConnection=true
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-only-jwt-signing-value-not-real
+      JWT_REFRESH_SECRET: ci-only-refresh-signing-value-not-real
+      JWT_EXPIRE_IN: 1h
+      SESSION_SECRET: ci-only-session-value-not-real
+      ENCRYPTION_KEY: ci0only0encryption0key0032bytes0 # must be exactly 32 bytes
+      STRIPE_API_SECRET: ci-dummy-stripe-value
+      WEBHOOK_SECRET: ci-dummy-webhook-value
+      BCRYPT_SALT_ROUNDS: "10"
+      CLIENT_URL: https://business.qa.invalid
+      ADMIN_URL: https://admin.qa.invalid
+      ADMIN_EMAIL: qa-admin@qa.invalid
+      ADMIN_PASSWORD: QaAdmin#2026
+      # Agent side
+      QA_BASE_URL: http://localhost:5004
+      QA_BACKEND_DIR: ${{ github.workspace }}
+      QA_CORS_ORIGINS: https://business.qa.invalid,https://admin.qa.invalid
+      QA_ALLOW_MUTATIONS: "true"
+      QA_RPM: "600" # local backend; well under the limiter once QA traffic is the only traffic
+      QA_PR_NUMBER: ${{ github.event.pull_request.number }}
+      QA_MERCHANT_A_ID: qa-merchant-a@qa.invalid
+      QA_MERCHANT_A_PASS: QaMerchantA#2026
+      QA_MERCHANT_B_ID: qa-merchant-b@qa.invalid
+      QA_MERCHANT_B_PASS: QaMerchantB#2026
+      QA_CUSTOMER_ID: qa-customer@qa.invalid
+      QA_CUSTOMER_PASS: QaCustomer#2026
+      QA_ADMIN_ID: qa-admin@qa.invalid
+      QA_ADMIN_PASS: QaAdmin#2026
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # needed for the diff against the base branch
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.QA_AGENT_REPO }}
+          token: ${{ secrets.QA_AGENT_TOKEN || github.token }}
+          path: .qa-agent
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            .qa-agent/package-lock.json
+
+      # Transactions (sell management) need a replica set, which a plain service container can't start.
+      - name: Start MongoDB (single-node replica set)
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:7.0-jammy --replSet rs0 --bind_ip_all
+          for _ in $(seq 1 30); do docker exec mongo mongosh --quiet --eval "db.adminCommand('ping')" && break; sleep 2; done
+          docker exec mongo mongosh --quiet --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+          for _ in $(seq 1 30); do [ "$(docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary')" = "true" ] && break; sleep 2; done
+
+      - name: Build backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install QA agent
+        working-directory: .qa-agent
+        run: npm ci
+
+      - name: Seed QA accounts into the throwaway DB
+        working-directory: .qa-agent
+        run: npx tsx seed/seed-ci.ts --uri "$DATABASE_URL"
+
+      - name: Boot backend
+        run: |
+          nohup node dist/server.js > backend.log 2>&1 &
+          cd .qa-agent
+          if ! npm run -s qa -- wait-for --url "$QA_BASE_URL" --timeout 120; then
+            tail -50 ../backend.log
+            exit 1
+          fi
+
+      - name: Run QA agent (pr suite)
+        id: qa
+        working-directory: .qa-agent
+        run: |
+          set +e
+          npm run -s qa -- run --suite pr --changed-from "origin/${{ github.base_ref }}" --out qa-out
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat qa-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: always() && steps.qa.outputs.code != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('.qa-agent/qa-out/summary.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const mine = comments.find(c => c.body && c.body.includes('<!-- qa-agent-report -->'));
+            if (mine) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body });
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-report-pr-${{ github.event.pull_request.number }}
+          path: |
+            .qa-agent/qa-out
+            backend.log
+          retention-days: 14
+
+      - name: Quality gate
+        if: steps.qa.outputs.code != '0'
+        run: |
+          echo "QA agent gate failed (exit ${{ steps.qa.outputs.code }}). Open the qa-report artifact → report.html."
+          exit 1
+
+  # ───────────────────────────── Staging & nightly ─────────────────────────────
+  staging:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The QA accounts allow one session each: never run two staging jobs at once.
+    concurrency:
+      group: qa-staging
+      cancel-in-progress: false
+    env:
+      SUITE: ${{ github.event_name == 'schedule' && 'nightly' || inputs.suite || 'staging' }}
+      QA_BASE_URL: ${{ vars.QA_STAGING_URL }}
+      QA_BACKEND_DIR: ${{ github.workspace }}
+      QA_CORS_ORIGINS: ${{ vars.QA_CORS_ORIGINS }}
+      QA_ADMIN_WEB_URL: ${{ vars.QA_ADMIN_WEB_URL }}
+      QA_BUSINESS_WEB_URL: ${{ vars.QA_BUSINESS_WEB_URL }}
+      QA_ADMIN_WEB_LOGIN: ${{ vars.QA_ADMIN_WEB_LOGIN }}
+      QA_BUSINESS_WEB_LOGIN: ${{ vars.QA_BUSINESS_WEB_LOGIN }}
+      QA_MERCHANT_A_ID: ${{ secrets.QA_MERCHANT_A_ID }}
+      QA_MERCHANT_A_PASS: ${{ secrets.QA_MERCHANT_A_PASS }}
+      QA_MERCHANT_B_ID: ${{ secrets.QA_MERCHANT_B_ID }}
+      QA_MERCHANT_B_PASS: ${{ secrets.QA_MERCHANT_B_PASS }}
+      QA_CUSTOMER_ID: ${{ secrets.QA_CUSTOMER_ID }}
+      QA_CUSTOMER_PASS: ${{ secrets.QA_CUSTOMER_PASS }}
+      QA_ADMIN_ID: ${{ secrets.QA_ADMIN_ID }}
+      QA_ADMIN_PASS: ${{ secrets.QA_ADMIN_PASS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'staging' || github.ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.QA_AGENT_REPO }}
+          token: ${{ secrets.QA_AGENT_TOKEN || github.token }}
+          path: .qa-agent
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .qa-agent/package-lock.json
+
+      - name: Install QA agent
+        working-directory: .qa-agent
+        run: npm ci
+
+      - name: Install browser for dashboard checks
+        if: env.QA_ADMIN_WEB_URL != '' || env.QA_BUSINESS_WEB_URL != ''
+        working-directory: .qa-agent
+        run: npx playwright install --with-deps chromium
+
+      - name: Approve visual baselines (manual run only)
+        if: inputs.update_visual
+        working-directory: .qa-agent
+        run: npm run -s qa -- run --only web-crawl,web-visual --update-visual --out qa-baselines
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.update_visual
+        with:
+          name: visual-baselines
+          path: .qa-agent/visual-baselines
+          retention-days: 30
+
+      - name: Install Schemathesis (nightly only)
+        if: env.SUITE == 'nightly'
+        run: pipx install schemathesis
+
+      - name: Wait for the new staging deploy
+        if: github.event_name == 'push'
+        working-directory: .qa-agent
+        run: npm run -s qa -- wait-for --url "$QA_BASE_URL" --fresh --timeout 1200
+
+      - name: Run QA agent
+        id: qa
+        working-directory: .qa-agent
+        run: |
+          set +e
+          npm run -s qa -- run --suite "$SUITE" --out qa-out
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat qa-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-report-${{ env.SUITE }}-${{ github.run_number }}
+          path: .qa-agent/qa-out
+          retention-days: 30
+
+      - name: Quality gate
+        if: steps.qa.outputs.code != '0'
+        run: |
+          echo "QA agent gate failed (exit ${{ steps.qa.outputs.code }}). Open the qa-report artifact → report.html."
+          exit 1

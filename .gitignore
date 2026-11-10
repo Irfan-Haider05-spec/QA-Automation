@@ -1,0 +1,20 @@
+node_modules/
+qa-out/
+qa-out-*/
+.env.qa
+test/fixture-known-issues.json
+.schemathesis/
+.hypothesis/
+schemathesis-report/
+fixture-visual-baselines/
+apps/api/.data/
+apps/dashboard/dist/
+apps/dashboard/e2e-report/
+apps/dashboard/e2e-results/
+qa-out-dashboard/
+# Server secrets: never commit
+.env
+deploy/.env
+deploy/certs/*.crt
+.sync/
+deploy/backups/

@@ -1,0 +1,193 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# QA Agent + QA platform for the MLITech backend.
+# COPY TO: Loyalty-Backend-Code/.github/workflows/qa.yml   (with qa.config.ts at the repo root)
+# Step-by-step setup: integrations/mlitech/README.md in the qa-agent repository.
+#
+#   pull_request   boots this PR's backend on a throwaway MongoDB + Redis, seeds QA
+#                  accounts, tests the routes the PR touches (write requests allowed:
+#                  the database is thrown away). One PR comment, a "QA gate" status,
+#                  the run goes to the platform.
+#   push staging   waits for Render to serve the new build, reports the deployment,
+#                  tests staging read-only with the accounts stored on the platform.
+#   nightly        the full suite against staging, including fuzzing and dashboards.
+#
+# Repository settings (Settings → Secrets and variables → Actions):
+#   Secrets    QA_PLATFORM_API_KEY  project API key (Send runs + Read test accounts)
+#              QA_AGENT_TOKEN       read-only token for tmhdigital/qa-agent (only while it is private)
+#   Variables  QA_PLATFORM_URL      e.g. https://qa.mlitech.com
+#              QA_PLATFORM_ENV      ID of the staging environment (platform → project → Environments)
+#              QA_STAGING_URL       e.g. https://rewaldo-staging.onrender.com
+#              QA_CORS_ORIGINS      staging dashboard origins, comma-separated
+#              QA_ADMIN_WEB_URL, QA_BUSINESS_WEB_URL   staging dashboards (optional; unset = no dashboard checks)
+# ─────────────────────────────────────────────────────────────────────────────
+name: QA
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+  push:
+    branches: [staging] # the branch Render deploys to staging; change if yours differs
+  schedule:
+    - cron: "41 21 * * *" # 02:41 Pakistan time
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Suite to run against staging
+        type: choice
+        options: [staging, nightly]
+        default: staging
+
+permissions:
+  contents: read
+  pull-requests: write # the PR comment
+  statuses: write # the "QA gate" commit status
+
+env:
+  QA_AGENT_REF: v1 # tag or branch of tmhdigital/qa-agent
+
+jobs:
+  # ───────────────────────────── PR: throwaway backend ─────────────────────────
+  pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      # Backend: throwaway values, this database lives only for this job
+      PORT: "5004"
+      NODE_ENV: production
+      DATABASE_URL: mongodb://localhost:27017/mlitech_qa?replicaSet=rs0&directConnection=true
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-only-jwt-signing-value-not-real
+      JWT_REFRESH_SECRET: ci-only-refresh-signing-value-not-real
+      JWT_EXPIRE_IN: 1h
+      SESSION_SECRET: ci-only-session-value-not-real
+      ENCRYPTION_KEY: ci0only0encryption0key0032bytes0 # must be exactly 32 bytes
+      STRIPE_API_SECRET: ci-dummy-stripe-value
+      WEBHOOK_SECRET: ci-dummy-webhook-value
+      BCRYPT_SALT_ROUNDS: "10"
+      CLIENT_URL: https://business.qa.invalid
+      ADMIN_URL: https://admin.qa.invalid
+      ADMIN_EMAIL: qa-admin@qa.invalid # the backend creates this SUPER_ADMIN on boot
+      ADMIN_PASSWORD: QaAdmin#2026
+      # Agent: the accounts seed-ci.ts creates
+      QA_CORS_ORIGINS: https://business.qa.invalid,https://admin.qa.invalid
+      QA_ALLOW_MUTATIONS: "true"
+      QA_RPM: "600" # local backend, QA traffic only
+      QA_SOCKET_URLS: http://localhost:5004,http://localhost:5005 # two instances, one Redis
+      QA_MERCHANT_A_ID: qa-merchant-a@qa.invalid
+      QA_MERCHANT_A_PASS: QaMerchantA#2026
+      QA_MERCHANT_B_ID: qa-merchant-b@qa.invalid
+      QA_MERCHANT_B_PASS: QaMerchantB#2026
+      QA_CUSTOMER_ID: qa-customer@qa.invalid
+      QA_CUSTOMER_PASS: QaCustomer#2026
+      QA_ADMIN_ID: qa-admin@qa.invalid
+      QA_ADMIN_PASS: QaAdmin#2026
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the PR diff needs the base branch
+
+      - uses: actions/checkout@v4
+        with:
+          repository: tmhdigital/qa-agent
+          ref: ${{ env.QA_AGENT_REF }}
+          token: ${{ secrets.QA_AGENT_TOKEN || github.token }}
+          path: .qa-agent
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            .qa-agent/package-lock.json
+
+      # Transactions need a replica set, which a plain service container can't start
+      - name: Start MongoDB (single-node replica set)
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:7.0-jammy --replSet rs0 --bind_ip_all
+          for _ in $(seq 1 30); do docker exec mongo mongosh --quiet --eval "db.adminCommand('ping')" && break; sleep 2; done
+          docker exec mongo mongosh --quiet --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+          for _ in $(seq 1 30); do [ "$(docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary')" = "true" ] && break; sleep 2; done
+
+      - name: Build backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Seed QA accounts into the throwaway database
+        working-directory: .qa-agent
+        run: |
+          npm ci --omit=dev --workspaces=false --no-audit --no-fund
+          node --import tsx seed/seed-ci.ts --uri "$DATABASE_URL"
+
+      # Two instances sharing MongoDB and Redis, like the PM2 cluster in production:
+      # the realtime checks expect an event to reach the user's socket on both.
+      - name: Boot backend (two instances)
+        run: |
+          nohup node dist/server.js > backend.log 2>&1 &
+          if ! node .qa-agent/bin/qa.mjs wait-for --url http://localhost:5004 --timeout 120; then
+            tail -50 backend.log
+            exit 1
+          fi
+          PORT=5005 NODE_APP_INSTANCE=1 nohup node dist/server.js > backend-2.log 2>&1 &
+          if ! node .qa-agent/bin/qa.mjs wait-for --url http://localhost:5005 --timeout 120; then
+            tail -50 backend-2.log
+            exit 1
+          fi
+
+      - uses: ./.qa-agent
+        with:
+          suite: pr
+          base-url: http://localhost:5004
+          platform-url: ${{ vars.QA_PLATFORM_URL }}
+          platform-api-key: ${{ secrets.QA_PLATFORM_API_KEY }}
+
+      - name: Backend logs
+        if: failure()
+        run: tail -100 backend.log backend-2.log
+
+  # ───────────────────────────── Staging & nightly ─────────────────────────────
+  staging:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The QA accounts allow one session each: never run two staging jobs at once
+    concurrency:
+      group: qa-staging
+      cancel-in-progress: false
+    env:
+      SUITE: ${{ github.event_name == 'schedule' && 'nightly' || inputs.suite || 'staging' }}
+      QA_CORS_ORIGINS: ${{ vars.QA_CORS_ORIGINS }}
+      QA_ADMIN_WEB_URL: ${{ vars.QA_ADMIN_WEB_URL }}
+      QA_BUSINESS_WEB_URL: ${{ vars.QA_BUSINESS_WEB_URL }}
+      QA_ZAP_DOCKER: ${{ github.event_name == 'schedule' && 'true' || 'false' }} # full OWASP ZAP baseline at night
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'staging' || github.ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: tmhdigital/qa-agent
+          ref: ${{ env.QA_AGENT_REF }}
+          token: ${{ secrets.QA_AGENT_TOKEN || github.token }}
+          path: .qa-agent
+
+      - uses: ./.qa-agent
+        with:
+          suite: ${{ env.SUITE }}
+          base-url: ${{ vars.QA_STAGING_URL }}
+          wait-for-deploy: ${{ github.event_name == 'push' }}
+          after-deploy: ${{ github.event_name == 'push' }}
+          platform-url: ${{ vars.QA_PLATFORM_URL }}
+          platform-api-key: ${{ secrets.QA_PLATFORM_API_KEY }}
+          platform-environment: ${{ vars.QA_PLATFORM_ENV }}
+          platform-accounts: "true"
+          install-browser: ${{ vars.QA_ADMIN_WEB_URL != '' || vars.QA_BUSINESS_WEB_URL != '' }}
+          install-schemathesis: ${{ env.SUITE == 'nightly' }}
+          changed-from: ""

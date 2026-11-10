@@ -1,0 +1,59 @@
+# Dashboard + API on one origin. ${API_UPSTREAM} is filled in at container start.
+
+# Keep the scheme the browser used when Caddy terminates TLS in front of us
+map $http_x_forwarded_proto $forwarded_proto {
+  default $http_x_forwarded_proto;
+  ""      $scheme;
+}
+
+server {
+  listen 8080;
+  server_name _;
+  root /usr/share/nginx/html;
+  server_tokens off;
+  client_max_body_size 12m;   # run uploads with many findings
+
+  # Security headers for the dashboard (the API sets its own)
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "DENY" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+  add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+  add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+  location /api/ {
+    proxy_pass http://${API_UPSTREAM};
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    proxy_read_timeout 120s;
+  }
+  location = /health { proxy_pass http://${API_UPSTREAM}; access_log off; }
+
+  # Never serve source maps or dotfiles, even if a build left some behind
+  location ~ (\.map$|/\.) { return 404; }
+
+  # Hashed build files never change: cache them for a year
+  location /assets/ {
+    add_header Cache-Control "public, max-age=31536000, immutable";
+    add_header X-Content-Type-Options "nosniff" always;
+    try_files $uri =404;
+  }
+  # Every other path is a dashboard route
+  location / {
+    add_header Cache-Control "no-cache";
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    try_files $uri /index.html;
+  }
+  # Shared report links: keep them out of search engines
+  location /r/ {
+    add_header X-Robots-Tag "noindex, nofollow" always;
+    add_header Cache-Control "no-cache";
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    try_files /index.html =404;
+  }
+}
