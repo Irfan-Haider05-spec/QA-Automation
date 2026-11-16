@@ -28,6 +28,7 @@ export function ProjectLayout() {
       </div>
       <nav className="tabs" aria-label="Project sections">
         <NavLink to={`${base}/runs`}>Runs</NavLink>
+        <NavLink to={`${base}/trends`}>Trends</NavLink>
         <NavLink to={`${base}/issues`}>Issues<span className="count">{p.openIssues}</span></NavLink>
         <NavLink to={`${base}/environments`}>Environments<span className="count">{p.environments?.length ?? 0}</span></NavLink>
         <NavLink to={`${base}/schedules`}>Schedules</NavLink>

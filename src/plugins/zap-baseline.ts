@@ -12,6 +12,7 @@
  *    (API response headers and CORS are covered by health-cors.)
  */
 import { spawnSync } from "node:child_process";
+import { executableCommand } from "../core/process.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { Finding, QaPlugin, Severity } from "../core/types.js";
@@ -25,7 +26,9 @@ interface ZapAlert { pluginid: string; alert?: string; name?: string; riskcode: 
 export function zapCommand(docker: boolean, image: string): string[] | null {
   if (docker) return spawnSync("docker", ["version"], { stdio: "ignore", timeout: 20000 }).status === 0 ? ["docker", "run", "--rm", "-v", "{out}:/zap/wrk:rw", image, "zap-baseline.py"] : null;
   for (const c of ["zap-baseline.py", "zap-baseline"]) {
-    if (spawnSync(c, ["-h"], { stdio: "ignore", timeout: 30000 }).error === undefined) return [c];
+    const command = executableCommand(c);
+    const probe = spawnSync(command[0], [...command.slice(1), "-h"], { stdio: "ignore", timeout: 30000, windowsHide: true });
+    if (!probe.error && probe.status === 0) return command;
   }
   return null;
 }

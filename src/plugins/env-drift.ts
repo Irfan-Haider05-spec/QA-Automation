@@ -34,6 +34,7 @@ function walk(dir: string, out: string[] = []) {
 export const envDriftPlugin: QaPlugin = {
   name: "env-drift",
   layer: "static",
+  needs: ["backendDir"],
   description: "Env vars read by code vs documented in .env.example",
   async run(ctx) {
     const dir = ctx.config.backend.dir;

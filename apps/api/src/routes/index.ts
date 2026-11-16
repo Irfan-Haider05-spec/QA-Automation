@@ -15,6 +15,7 @@ import { CredentialsRouter } from "../modules/credentials/credentials.routes.js"
 import { ApiKeysRouter } from "../modules/apiKeys/apiKeys.routes.js";
 import { RunsRouter } from "../modules/runs/runs.routes.js";
 import { IssuesRouter } from "../modules/issues/issues.routes.js";
+import { CollaborationRouter } from "../modules/issues/collaboration.routes.js";
 import { AuditRouter } from "../modules/audit/audit.routes.js";
 import { RunnerRouter } from "../modules/runner/runner.routes.js";
 import { DeploymentsRouter } from "../modules/deployments/deployments.routes.js";
@@ -26,11 +27,19 @@ import { NotificationsRouter } from "../modules/notifications/notifications.rout
 import { ReportsRouter } from "../modules/reports/reports.routes.js";
 import { ReportSharesRouter } from "../modules/reports/shares.routes.js";
 import { PublicReportsRouter } from "../modules/reports/public.routes.js";
+import { ArtifactUploadRouter } from "../modules/artifacts/artifacts.routes.js";
+import { MfaRouter } from "../modules/auth/mfa.routes.js";
+import { SsoRouter } from "../modules/auth/sso.routes.js";
+import { BillingRouter, BillingEventsRouter } from "../modules/billing/billing.routes.js";
 
 const router = express.Router();
 
 const apiRoutes = [
   { path: "/auth", route: AuthRoutes },
+  { path: "/auth", route: MfaRouter },
+  { path: "/auth", route: SsoRouter },
+  { path: "/billing", route: BillingEventsRouter },
+  { path: "/orgs/:orgId/billing", route: BillingRouter },
   { path: "/invites", route: InviteAcceptRouter },
   { path: "/orgs", route: OrgRoutes },
   { path: "/orgs/:orgId/members", route: MembersRouter },
@@ -43,11 +52,13 @@ const apiRoutes = [
   { path: "/orgs/:orgId/projects/:projectId/api-keys", route: ApiKeysRouter },
   { path: "/orgs/:orgId/projects/:projectId/runs", route: RunsRouter },
   { path: "/orgs/:orgId/projects/:projectId/issues", route: IssuesRouter },
+  { path: "/orgs/:orgId/projects/:projectId/collaboration", route: CollaborationRouter },
   { path: "/orgs/:orgId/projects/:projectId/deployments", route: DeploymentsRouter },
   { path: "/orgs/:orgId/projects/:projectId/jobs", route: JobsRouter },
   { path: "/orgs/:orgId/projects/:projectId/hosted", route: HostedStatusRouter },
   { path: "/orgs/:orgId/projects/:projectId/schedules", route: SchedulesRouter },
   { path: "/runner", route: RunnerRouter },
+  { path: "/runner", route: ArtifactUploadRouter },
   { path: "/hosted", route: HostedRouter },
   { path: "/orgs/:orgId/notifications", route: NotificationsRouter },
   { path: "/orgs/:orgId/reports", route: ReportsRouter },

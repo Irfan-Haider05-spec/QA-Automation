@@ -158,11 +158,14 @@ test("cancelling a running job: the next heartbeat says stop; completing records
 
 test("a silent runner's job is retried once, then failed", async () => {
   const j = (await jobs({ environmentId: envA, suite: "staging" })).body.job;
+  const usageBefore = (await api.call("GET", `/orgs/${o.orgId}/billing`, { token: o.token })).body.usage;
   assert.equal((await hosted("POST", "/jobs/claim")).body.job.id, j.id);
-  const age = () => api.db.raw("update run_jobs set heartbeat_at = now() - interval '10 minutes' where id = $1", [j.id]);
+  const age = () => api.db.raw("update run_jobs set heartbeat_at = now() - interval '10 minutes', claimed_at = now() - interval '2 minutes' where id = $1", [j.id]);
   await age();
   const t1 = await schedulerTick(api.db, { JOB_STALE_SECONDS: 60 });
   assert.equal(t1.requeued, 1);
+  const [firstAttempt] = await api.db.raw("select runtime_ms from run_jobs where id = $1", [j.id]);
+  assert.ok(Number(firstAttempt.runtime_ms) >= 60_000, "The first stale attempt's elapsed time is accumulated before requeue");
   const again = await hosted("POST", "/jobs/claim", undefined, runner("runner-3"));
   assert.equal(again.body.job.id, j.id);
   assert.equal(again.body.job.attempts, 2);
@@ -174,6 +177,12 @@ test("a silent runner's job is retried once, then failed", async () => {
   const listed = (await api.call("GET", `/orgs/${o.orgId}/projects/${projectId}/jobs`, { token: o.token })).body.jobs.find((x: any) => x.id === j.id);
   assert.equal(listed.status, "error");
   assert.match(listed.error, /stopped responding/);
+  const usageAfter = (await api.call("GET", `/orgs/${o.orgId}/billing`, { token: o.token })).body.usage;
+  assert.equal(usageAfter.runs, usageBefore.runs + 1, "The terminal stale outcome is recorded once as a run");
+  assert.ok(usageAfter.hostedMinutes - usageBefore.hostedMinutes >= 3, "Both server-measured attempts are billed after the retry fails");
+  await schedulerTick(api.db, { JOB_STALE_SECONDS: 60 });
+  const usageAgain = (await api.call("GET", `/orgs/${o.orgId}/billing`, { token: o.token })).body.usage;
+  assert.equal(usageAgain.runs, usageAfter.runs, "Repeating maintenance does not account the terminal job twice");
 });
 
 test("queued jobs on an environment that loses verification fail with the reason", async () => {

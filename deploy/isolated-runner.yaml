@@ -1,0 +1,136 @@
+# Example one-job-per-pod hosted worker.
+# Requires a CNI that enforces NetworkPolicy and a node/runtime configured for
+# Chromium's unprivileged user-namespace sandbox. RuntimeDefault must permit
+# the syscalls Chromium needs; do not add --no-sandbox or a privileged pod.
+# This manifest has not been validated against a live Kubernetes cluster.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: qa-isolated-runner
+  namespace: qa-platform
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qa-isolated-runner
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: runner
+          image: ghcr.io/example/qa-platform-runner:replace-me
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: QA_PLATFORM_URL
+              value: http://qa-api.qa-platform.svc.cluster.local:4100
+            - name: QA_RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: qa-runner-token
+                  key: token
+            - name: QA_RUNNER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: QA_RUNNER_MAX_JOBS
+              value: "1"
+            - name: QA_RUNNER_WORKDIR
+              value: /work/jobs
+            - name: HOME
+              value: /work
+            - name: TMPDIR
+              value: /work
+            - name: QA_CHROMIUM_SANDBOX
+              value: "true"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+              ephemeral-storage: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      volumes:
+        - name: work
+          emptyDir:
+            sizeLimit: 4Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: qa-isolated-runner-egress
+  namespace: qa-platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: qa-isolated-runner
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    # Only this control-plane API may receive runner credentials.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: qa-platform
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: qa-api
+      ports:
+        - protocol: TCP
+          port: 4100
+    # Cluster DNS is needed to resolve the API and tested public services.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Browser tests may reach public sites over HTTP(S). Private, loopback,
+    # link-local, carrier-grade NAT, multicast, and metadata address ranges are excluded.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443

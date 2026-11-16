@@ -14,6 +14,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import type { RunContext } from "../core/context.js";
 import type { WebAppConfig } from "../core/config.js";
 import { discoverSpaRoutes } from "../discovery/spa-routes.js";
+import { chromiumLaunchOptions } from "./browser-options.js";
 
 export interface NetworkIssue { method: string; url: string; status?: number; failure?: string; kind: "api" | "asset" | "document" }
 export interface AxeViolation { id: string; impact: string | null; help: string; helpUrl: string; nodes: string[] }
@@ -45,7 +46,7 @@ export interface CrawlResult {
   discoveredFromSource: number;
 }
 
-const cache = new Map<string, Promise<CrawlResult>>();
+const cache = new WeakMap<RunContext, Map<string, Promise<CrawlResult>>>();
 
 export const templateOf = (p: string) =>
   p.split("/").map((seg) => (/^[0-9a-f]{24}$/i.test(seg) || /^\d+$/.test(seg) || /^[0-9a-f-]{36}$/i.test(seg) ? ":id" : seg)).join("/") || "/";
@@ -56,8 +57,10 @@ const ASSET_RE = /\.(js|mjs|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|map)(\?|$)
 const DOWNLOAD_RE = /\.(pdf|xlsx?|csv|zip|docx?)(\?|$)/i;
 
 export function getCrawl(ctx: RunContext, app: WebAppConfig): Promise<CrawlResult> {
-  if (!cache.has(app.name)) cache.set(app.name, crawl(ctx, app));
-  return cache.get(app.name)!;
+  let run = cache.get(ctx);
+  if (!run) { run = new Map(); cache.set(ctx, run); }
+  if (!run.has(app.name)) run.set(app.name, crawl(ctx, app));
+  return run.get(app.name)!;
 }
 
 export async function login(page: Page, app: WebAppConfig, ctx: RunContext): Promise<string | undefined> {
@@ -101,12 +104,8 @@ async function crawl(ctx: RunContext, app: WebAppConfig): Promise<CrawlResult> {
 
   let browser: Browser | undefined;
   try {
-    // QA_CHROMIUM_PATH lets you use an installed Chrome/Chromium instead of Playwright's download
-    // (e.g. locked-down networks); QA_CHROMIUM_ARGS adds launch flags such as --no-sandbox.
-    browser = await chromium.launch({
-      executablePath: process.env.QA_CHROMIUM_PATH || undefined,
-      args: process.env.QA_CHROMIUM_ARGS ? process.env.QA_CHROMIUM_ARGS.split(/\s+/).filter(Boolean) : undefined,
-    });
+    // QA_CHROMIUM_SANDBOX is explicit; conflicting --no-sandbox args are rejected centrally.
+    browser = await chromium.launch(chromiumLaunchOptions());
     const context = await browser.newContext({ viewport: ctx.config.web.viewport, reducedMotion: "reduce", locale: "en-US", timezoneId: "Asia/Karachi" });
     const page = await context.newPage();
 

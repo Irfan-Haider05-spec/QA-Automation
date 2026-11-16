@@ -8,10 +8,12 @@ import { Vault } from "./lib/crypto.js";
 import { errorHandler } from "./lib/http.js";
 import router from "./routes/index.js";
 import { metricsHandler, requestObserver } from "./lib/observe.js";
+import { artifactStore, type ArtifactStore } from "./lib/artifacts.js";
+import { identityProvider, type IdentityProvider } from "./lib/identity.js";
 
-export function createApp(db: Db, config: Config) {
+export function createApp(db: Db, config: Config, artifacts: ArtifactStore | undefined = artifactStore(config), identity: IdentityProvider | undefined = identityProvider(config)) {
   const app = express();
-  app.locals.deps = { db, config, vault: new Vault(config.VAULT_MASTER_KEY) };
+  app.locals.deps = { db, config, vault: new Vault(config.VAULT_MASTER_KEY), artifacts, identity };
   app.disable("x-powered-by");
   if (config.NODE_ENV === "production") app.set("trust proxy", config.TRUST_PROXY);
 
@@ -20,9 +22,11 @@ export function createApp(db: Db, config: Config) {
   const origins = config.CORS_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean);
   // Unknown origins get no CORS headers (the browser blocks them) instead of an error response
   app.use(cors({ origin: (origin, cb) => cb(null, !origin || origins.includes(origin)), credentials: true }));
+  app.use("/api/v1/billing/events", express.raw({ type: "application/json", limit: "64kb" }));
   app.use(express.json({ limit: "10mb" }));
 
   if (config.NODE_ENV !== "test") {
+    app.use(["/api/v1/auth/mfa", "/api/v1/auth/sso"], rateLimit({ windowMs: 60_000, limit: config.AUTH_RATE_LIMIT_PER_MINUTE, standardHeaders: "draft-7", legacyHeaders: false }));
     app.use("/api/v1", rateLimit({ windowMs: 60_000, limit: config.RATE_LIMIT_PER_MINUTE, standardHeaders: "draft-7", legacyHeaders: false }));
     app.use(["/api/v1/auth/login", "/api/v1/auth/signup", "/api/v1/auth/refresh", "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password", "/api/v1/auth/verify-email"], rateLimit({ windowMs: 60_000, limit: config.AUTH_RATE_LIMIT_PER_MINUTE, standardHeaders: "draft-7", legacyHeaders: false }));
   }

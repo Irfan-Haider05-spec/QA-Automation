@@ -42,12 +42,13 @@ export function markdown(s: RunSummary): string {
   const c = counts(all);
   const known = all.filter((f) => f.known).length;
   const icon = s.gate.envError ? "⚠️" : s.gate.passed ? "✅" : "❌";
+  const errors = s.results.filter((r) => r.status === "errored").length;
   const lines: string[] = [];
   lines.push(`<!-- qa-agent-report -->`);
   lines.push(`## ${icon} QA agent · ${s.suite} suite`);
   if (s.gate.envError) lines.push(`\n**Environment problem:** ${s.gate.envError}`);
   lines.push(
-    `\n**Gate:** ${s.gate.passed ? "passed" : `failed: ${s.gate.blocking} new finding(s) at ${s.gate.failOn} or above`} · ` +
+    `\n**Gate:** ${s.gate.passed ? "passed" : `failed: ${s.gate.blocking} new finding(s) at ${s.gate.failOn} or above; ${errors} errored check(s)`} · ` +
       `critical ${c.critical} · high ${c.high} · medium ${c.medium} · low ${c.low} · known ${known}`,
   );
   lines.push(`\nTarget: \`${s.target ?? "static only"}\` · routes ${s.routesSelected}/${s.routesTotal} (${s.selectionReason}) · ${s.requests} requests · ${(s.durationMs / 1000).toFixed(0)}s`);
@@ -76,6 +77,10 @@ export function html(s: RunSummary): string {
     .map((f) => {
       const ev = f.evidence ?? {};
       const evParts = [
+        f.flaky ? `<div><b>Flaky:</b> failure followed by success; excluded from the gate.</div>` : "",
+        f.confidence ? `<div><b>Confidence</b> ${esc(f.confidence)}</div>` : "",
+        f.cwe?.length ? `<div><b>CWE</b> ${esc(f.cwe.join(", "))}</div>` : "",
+        f.remediation ? `<div><b>Remediation</b> ${esc(f.remediation)}</div>` : "",
         ev.status !== undefined ? `<div><b>Status</b> ${esc(ev.status)}</div>` : "",
         ev.file ? `<div><b>Source</b> <code>${esc(ev.file)}${ev.line ? ":" + ev.line : ""}</code></div>` : "",
         ev.curl ? `<pre>${esc(ev.curl)}</pre>` : "",

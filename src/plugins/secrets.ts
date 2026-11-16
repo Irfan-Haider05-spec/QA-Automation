@@ -1,6 +1,6 @@
 /**
- * Secret scanning of tracked files. Uses gitleaks when it is installed,
- * otherwise a built-in rule set. Matches are redacted in the report.
+ * Secret scanning of tracked files. Built-in rules always run; installed
+ * gitleaks adds coverage. Installing a scanner must never remove a rule.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -48,11 +48,12 @@ function trackedFiles(dir: string): string[] {
 export const secretsPlugin: QaPlugin = {
   name: "secrets",
   layer: "static",
+  needs: ["backendDir"],
   description: "Committed credentials and .env files",
   async run(ctx) {
     const dir = ctx.config.backend.dir;
     const ignore = picomatch(["**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml", "**/*.min.js", "**/.env.example", ...ctx.config.secrets.ignorePaths], { dot: true });
-    const files = trackedFiles(dir).filter((f) => !ignore(f));
+    const files = trackedFiles(dir).map((f) => f.replace(/\\/g, "/")).filter((f) => !ignore(f));
     const findings: Finding[] = [];
 
     for (const f of files) {
@@ -66,16 +67,19 @@ export const secretsPlugin: QaPlugin = {
     const gl = spawnSync("gitleaks", ["version"], { encoding: "utf8" });
     if (gl.status === 0) {
       usedGitleaks = true;
-      const report = path.join(os.tmpdir(), `gitleaks-${process.pid}.json`);
-      spawnSync("gitleaks", ["detect", "--no-git", "--redact", "-s", dir, "-f", "json", "-r", report, "--exit-code", "0"], { encoding: "utf8" });
-      if (fs.existsSync(report)) {
+      const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), "veriq-gitleaks-"));
+      const report = path.join(reportDir, "report.json");
+      try {
+        const result = spawnSync("gitleaks", ["detect", "--no-git", "--redact", "-s", dir, "-f", "json", "-r", report, "--exit-code", "0"], { encoding: "utf8", timeout: 120000, maxBuffer: 2 * 1024 * 1024, windowsHide: true });
+        if (result.error || result.status !== 0 || !fs.existsSync(report)) throw new Error("Gitleaks failed to produce a completed report");
         for (const l of JSON.parse(fs.readFileSync(report, "utf8") || "[]")) {
           const rel = path.relative(dir, path.resolve(dir, l.File)).replace(/\\/g, "/");
           if (ignore(rel)) continue;
-          findings.push({ plugin: this.name, severity: "high", category: "security", target: `${rel}:${l.StartLine}`, title: `Secret found by gitleaks (${l.RuleID})`, evidence: { file: rel, line: l.StartLine, log: l.Match } });
+          findings.push({ plugin: this.name, severity: "high", category: "security", target: `${rel}:${l.StartLine}`, title: `Secret found by gitleaks (${l.RuleID})`, evidence: { file: rel, line: l.StartLine, log: "Secret value omitted; inspect the source locally." } });
         }
-      }
-    } else {
+      } finally { fs.rmSync(reportDir, { recursive: true, force: true }); }
+    }
+    {
       for (const f of files) {
         const abs = path.join(dir, f);
         let st: fs.Stats;
@@ -100,6 +104,6 @@ export const secretsPlugin: QaPlugin = {
         });
       }
     }
-    return { findings, stats: { filesScanned: files.length, engine: usedGitleaks ? "gitleaks" : "built-in rules" } };
+    return { findings, stats: { filesScanned: files.length, engine: usedGitleaks ? "built-in rules + gitleaks" : "built-in rules" } };
   },
 };

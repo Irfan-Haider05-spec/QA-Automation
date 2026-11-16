@@ -7,7 +7,6 @@
 import crypto from "node:crypto";
 import { Router, type Request } from "express";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { auth } from "../../middleware/auth.js";
 import { ApiError, conflict, handle, isUuid, validate, zEmail, zName } from "../../lib/http.js";
@@ -15,20 +14,14 @@ import { deps, scoped } from "../../lib/context.js";
 import { randomToken, safeEqualHex, sha256 } from "../../lib/crypto.js";
 import { withContext, type Query } from "../../db/index.js";
 import { actionMail, sendMail } from "../../lib/mail.js";
+import { issueTokens, loginResult, revokeSessions } from "../../lib/sessions.js";
+import { consumeMfa } from "../auth/mfa.routes.js";
 
 const router = Router();
 
 const zPassword = z.string().min(10, "Use at least 10 characters").max(200);
 // Compared against when the email doesn't exist, so response time doesn't reveal which emails are registered
 const DUMMY_HASH = bcrypt.hashSync("not-a-real-password-qa-platform", 10);
-
-async function issueTokens(req: Request, q: Query, userId: string) {
-  const { config } = deps(req);
-  const accessToken = jwt.sign({}, config.JWT_SECRET, { algorithm: "HS256", subject: userId, expiresIn: config.ACCESS_TOKEN_TTL as jwt.SignOptions["expiresIn"] });
-  const refreshToken = randomToken(32);
-  await q("insert into refresh_tokens (user_id, token_hash, expires_at) values ($1, $2, now() + make_interval(days => $3))", [userId, sha256(refreshToken), config.REFRESH_TOKEN_DAYS]);
-  return { accessToken, refreshToken, tokenType: "Bearer" };
-}
 
 const publicUser = (u: any) => ({ id: u.id, email: u.email, name: u.name, emailVerified: !!u.email_verified_at });
 
@@ -46,17 +39,17 @@ async function newAccountToken(q: Query, userId: string, purpose: "password_rese
   return token;
 }
 
-/** Send, or, without SMTP, log the link so a self-hosting admin can pass it on */
+/** Recovery links are credentials. Never write them or recipient addresses to logs. */
 async function deliver(req: Request, mail: Parameters<typeof actionMail>[0], what: string) {
   const { config } = deps(req);
   if (!config.SMTP_URL) {
-    console.warn(`[auth] SMTP_URL not set: ${what} link for ${mail.to}: ${mail.url}`);
+    console.warn(`[auth] SMTP_URL not set: ${what} email was not sent`);
     return;
   }
   try {
     await sendMail(config, actionMail(mail));
   } catch (e) {
-    console.error(`[auth] couldn't send the ${what} email to ${mail.to}: ${(e as Error).message}`);
+    console.error(`[auth] could not send the ${what} email`);
   }
 }
 
@@ -102,7 +95,7 @@ async function checkInvite(req: Request, token: string | undefined, email: strin
 router.get(
   "/options",
   handle(async (req, res) => {
-    res.json({ signupOpen: await signupOpen(req), emailVerification: !!deps(req).config.SMTP_URL, passwordReset: true });
+    res.json({ signupOpen: await signupOpen(req), emailVerification: !!deps(req).config.SMTP_URL, passwordReset: true, ssoEnabled: !!deps(req).identity });
   }),
 );
 
@@ -145,10 +138,10 @@ router.post(
   handle(async (req, res) => {
     const { email, password } = req.body;
     const out = await withContext(deps(req).db, {}, async (q) => {
-      const [user] = await q("select id, email, name, password_hash, email_verified_at from users where lower(email) = $1", [email]);
+      const [user] = await q("select id, email, name, password_hash, email_verified_at from users where lower(email) = $1 for update", [email]);
       const ok = await bcrypt.compare(password, user?.password_hash ?? DUMMY_HASH);
       if (!user || !ok) throw new ApiError(401, "invalid_credentials", "Email or password is incorrect");
-      return { user: publicUser(user), tokens: await issueTokens(req, q, user.id) };
+      return loginResult(req, q, user);
     });
     res.json(out);
   }),
@@ -166,15 +159,30 @@ router.post(
       // A logged-out or password-changed token is just stale. An already-exchanged one coming
       // back means someone copied it: sign out every session (separate transaction, so it sticks).
       if ((t.revoke_reason ?? "rotated") !== "rotated") throw new ApiError(401, "invalid_token", "This session has ended. Log in again.");
-      await withContext(db, {}, (q) => q("update refresh_tokens set revoked_at = now(), revoke_reason = 'reuse' where user_id = $1 and revoked_at is null", [t.user_id]));
+      await withContext(db, {}, async (q) => {
+        await q("select id from users where id = $1 for update", [t.user_id]);
+        await revokeSessions(q, t.user_id, "reuse");
+      });
       throw new ApiError(401, "token_reused", "Refresh token was already used; all sessions have been signed out");
     }
     if (new Date(t.expires_at) < new Date()) throw new ApiError(401, "invalid_token", "Refresh token has expired");
     const out = await withContext(db, {}, async (q) => {
+      await q("select id from users where id = $1 for update", [t.user_id]);
       const used = await q("update refresh_tokens set revoked_at = now(), revoke_reason = 'rotated' where id = $1 and revoked_at is null returning id", [t.id]);
-      if (!used.length) throw new ApiError(401, "invalid_token", "Refresh token is not valid");
+      if (!used.length) {
+        const [current] = await q("select revoke_reason from refresh_tokens where id = $1", [t.id]);
+        if (current?.revoke_reason === "rotated") {
+          // Another concurrent request rotated it after our initial lookup. Treat
+          // this exactly like sequential reuse and commit the global revocation.
+          await revokeSessions(q, t.user_id, "reuse");
+          return { reused: true as const };
+        }
+        return { invalid: true as const };
+      }
       return { tokens: await issueTokens(req, q, t.user_id) };
     });
+    if ("reused" in out) throw new ApiError(401, "token_reused", "Refresh token was already used; all sessions have been signed out");
+    if ("invalid" in out) throw new ApiError(401, "invalid_token", "Refresh token is not valid");
     res.json(out);
   }),
 );
@@ -235,7 +243,7 @@ router.post(
     await withContext(deps(req).db, {}, async (q) => {
       const userId = await consumeToken(q, req.body.token, "password_reset");
       // The link proved the user reads this inbox, so the address counts as verified too
-      await q("update users set password_hash = $1, email_verified_at = coalesce(email_verified_at, now()) where id = $2", [hash, userId]);
+      await q("update users set password_hash = $1, auth_version = auth_version + 1, email_verified_at = coalesce(email_verified_at, now()) where id = $2", [hash, userId]);
       await q("update account_tokens set used_at = now() where user_id = $1 and purpose = 'password_reset' and used_at is null", [userId]);
       // Sign out everywhere: whoever had the old password loses their sessions
       await q("update refresh_tokens set revoked_at = now(), revoke_reason = 'reset' where user_id = $1 and revoked_at is null", [userId]);
@@ -293,12 +301,30 @@ router.post(
     const out = await withContext(deps(req).db, {}, async (q) => {
       const [u] = await q("select password_hash from users where id = $1", [req.user!.id]);
       if (!(await bcrypt.compare(req.body.currentPassword, u.password_hash))) throw new ApiError(400, "wrong_password", "Your current password isn't right");
-      await q("update users set password_hash = $1 where id = $2", [await bcrypt.hash(req.body.newPassword, 12), req.user!.id]);
+      await q("update users set password_hash = $1, auth_version = auth_version + 1 where id = $2", [await bcrypt.hash(req.body.newPassword, 12), req.user!.id]);
       // Other devices are signed out; this one gets fresh tokens
       await q("update refresh_tokens set revoked_at = now(), revoke_reason = 'password' where user_id = $1 and revoked_at is null", [req.user!.id]);
       return { tokens: await issueTokens(req, q, req.user!.id) };
     });
     res.json(out);
+  }),
+);
+
+router.post(
+  "/revoke-sessions",
+  auth(),
+  validate({ body: z.object({ password: z.string().min(1).max(200), code: z.string().min(6).max(100).optional() }).strict() }),
+  handle(async (req, res) => {
+    const result = await withContext(deps(req).db, {}, async (q) => {
+      const [user] = await q("select password_hash from users where id = $1 for update", [req.user!.id]);
+      if (!user || !(await bcrypt.compare(req.body.password, user.password_hash))) throw new ApiError(400, "wrong_password", "Your password isn't right");
+      const [mfa] = await q("select enabled from user_mfa where user_id = $1", [req.user!.id]);
+      if (mfa?.enabled && (!req.body.code || !await consumeMfa(q, deps(req).vault, req.user!.id, req.body.code))) return false;
+      await revokeSessions(q, req.user!.id);
+      return true;
+    });
+    if (!result) throw new ApiError(401, "invalid_mfa", "Invalid or expired authentication code");
+    res.status(204).end();
   }),
 );
 

@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { useCurrentOrg } from "../lib/org";
 import { plural } from "../lib/format";
 import { Button, Confirm, ErrorAlert, Field, Input, Loading, useToast } from "../components/ui";
+import { BillingSettings } from "./BillingSettings";
 
 function RenameOrg({ name }: { name: string }) {
   const { orgId, can } = useCurrentOrg();
@@ -66,6 +67,7 @@ export function OrgSettingsPage() {
   return (
     <div className="page" style={{ maxWidth: 760 }}>
       <div className="page-head"><div><h1>Settings</h1></div></div>
+      <BillingSettings />
       {q.isLoading ? <Loading /> : q.error ? <ErrorAlert error={q.error} /> : (
         <>
           <RenameOrg name={q.data!.name} />

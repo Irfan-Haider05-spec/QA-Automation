@@ -4,6 +4,7 @@
  * failing later at request time.
  */
 import { z } from "zod";
+import { BillingPlanSchema, DEFAULT_PLAN } from "@qa/shared";
 
 const base64Key = z
   .string()
@@ -29,6 +30,25 @@ const envBool = (fallback: boolean) =>
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().default(4100),
+  ISSUE_GATEWAY_URL: optional(z.string().url().refine((u) => { const x = new URL(u); return x.protocol === "https:" && !x.username && !x.password && !x.search && !x.hash; })),
+  ISSUE_GATEWAY_TOKEN: optional(z.string().min(32)),
+  BILLING_PLANS: z.preprocess((v) => {
+    if (!v) return [DEFAULT_PLAN];
+    if (typeof v !== "string" || v.length > 50000) return null;
+    try { return JSON.parse(v); } catch { return null; }
+  }, z.array(BillingPlanSchema).min(1).max(30).refine((p) => new Set(p.map((v) => v.id)).size === p.length, "Plan IDs must be unique")),
+  BILLING_GATEWAY_URL: optional(z.string().url().refine((u) => { const x = new URL(u); return x.protocol === "https:" && !x.username && !x.password && !x.search && !x.hash; })),
+  BILLING_GATEWAY_TOKEN: optional(z.string().min(32)),
+  BILLING_WEBHOOK_SECRET: optional(z.string().min(32)),
+  OIDC_ISSUER: optional(z.string().url().refine((u) => { const x = new URL(u); return x.protocol === "https:" && !x.username && !x.password && !x.search && !x.hash; }, "must be an HTTPS issuer URL")),
+  OIDC_CLIENT_ID: optional(z.string().min(1).max(300)),
+  OIDC_CLIENT_SECRET: optional(z.string().min(1).max(2000)),
+  OIDC_REDIRECT_URI: optional(z.string().url().refine((u) => { const x = new URL(u); return x.protocol === "https:" && !x.username && !x.password && !x.search && !x.hash; }, "must be a fixed HTTPS callback URL")),
+  ARTIFACT_BUCKET: optional(z.string().min(3).max(63)),
+  ARTIFACT_ENDPOINT: optional(z.string().url().refine((u) => { const url = new URL(u); return url.protocol === "https:" && !url.username && !url.password; }, "must be HTTPS without URL credentials")),
+  ARTIFACT_REGION: z.string().default("us-east-1"),
+  ARTIFACT_PATH_STYLE: envBool(false),
+  ARTIFACT_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   /**
    * postgres://qa_app:...@host:5432/qa_platform  → real PostgreSQL (staging/production)
    * pglite://./.data/pg                         → embedded PostgreSQL in a folder (local dev)

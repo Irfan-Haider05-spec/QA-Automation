@@ -1,4 +1,5 @@
 import type { QaPlugin } from "../core/types.js";
+import { EXPANDED_PLUGINS } from "./expanded/index.js";
 import { routeAuthPlugin } from "./route-auth.js";
 import { envDriftPlugin } from "./env-drift.js";
 import { secretsPlugin } from "./secrets.js";
@@ -20,6 +21,7 @@ import { mobilePlugin } from "./mobile.js";
 
 /** Registry. To add a tool: write a plugin file, add it here, list it in a suite in qa.config.ts. */
 export const PLUGINS: QaPlugin[] = [
+  ...EXPANDED_PLUGINS,
   routeAuthPlugin,
   envDriftPlugin,
   secretsPlugin,

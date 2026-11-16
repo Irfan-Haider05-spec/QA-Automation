@@ -43,6 +43,9 @@ export const apiAuthPlugin: QaPlugin = {
       }
 
       // 1a. No token
+      // A broken auth middleware can let this request mutate data. Never infer
+      // that source-declared authentication makes an anonymous write safe.
+      if (r.method !== "GET" && !ctx.config.allowMutations) continue;
       const req1 = { method: r.method, path: p, json: r.method === "GET" ? undefined : {} };
       const res1 = await http.send(req1); checks++;
       if (isNotMountedResponse(res1.status, res1.text)) { notMounted.push(key); continue; }

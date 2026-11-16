@@ -8,12 +8,16 @@ import type { ApiKeyScope, Role } from "@qa/shared";
 import type { Config } from "../config.js";
 import { withContext, type Db, type Query } from "../db/index.js";
 import type { Vault } from "./crypto.js";
+import type { ArtifactStore } from "./artifacts.js";
+import type { IdentityProvider } from "./identity.js";
 import { notFound } from "./http.js";
 
 export interface Deps {
   db: Db;
   config: Config;
   vault: Vault;
+  artifacts?: ArtifactStore;
+  identity?: IdentityProvider;
 }
 
 export interface Member {

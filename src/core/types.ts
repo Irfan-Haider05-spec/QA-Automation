@@ -54,6 +54,11 @@ export interface Finding {
   /** Filled by triage */
   fingerprint?: string;
   known?: { reason: string; since?: string };
+  confidence?: "high" | "medium" | "low";
+  cwe?: string[];
+  owasp?: string[];
+  remediation?: string;
+  flaky?: boolean;
 }
 
 export interface PluginResult {
@@ -72,6 +77,8 @@ export interface Logger {
 }
 
 export interface QaPlugin {
+  /** SDK major version. Local plugins execute with the same privileges as the CLI. */
+  apiVersion?: 1;
   name: string;
   layer: Layer;
   description: string;
@@ -79,6 +86,8 @@ export interface QaPlugin {
   needs?: Array<"baseUrl" | "accounts" | "backendDir" | "openapi" | "webApps">;
   /** Return a string to skip with that reason, or null to run */
   skipReason?(ctx: import("./context.js").RunContext): string | null;
+  /** Only explicitly read-only checks may implement confirmation. Never rerun a write/flow implicitly. */
+  confirm?(ctx: import("./context.js").RunContext, finding: Finding): Promise<"confirmed" | "cleared" | "inconclusive">;
   run(ctx: import("./context.js").RunContext): Promise<Finding[] | { findings: Finding[]; stats?: PluginResult["stats"] }>;
 }
 

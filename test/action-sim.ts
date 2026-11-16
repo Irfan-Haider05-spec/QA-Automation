@@ -11,7 +11,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AddressInfo } from "node:net";
 import { parse } from "yaml";
 
@@ -147,7 +147,10 @@ async function runStep_(inputs: Record<string, string>, event: { name: string; p
     GITHUB_WORKSPACE: ws, GITHUB_OUTPUT: files.out, GITHUB_STEP_SUMMARY: files.summary, GITHUB_ACTION_PATH: root,
     ...stepEnv(inputs, ws),
   };
-  const child = spawn("bash", [path.join(root, "action/run.sh")], { cwd: root, env });
+  // Use the host's native Git Bash on Windows; WSL bash cannot open Windows
+  // checkout paths or execute the host Node installation. Assertions stay shared.
+  const bash = process.env.QA_BASH_PATH ?? (process.platform === "win32" ? path.join(process.env.ProgramFiles ?? "C:/Program Files", "Git/bin/bash.exe") : "bash");
+  const child = spawn(bash, [path.join(root, "action/run.sh").replace(/\\/g, "/")], { cwd: root, env });
   let stdout = "";
   child.stdout.on("data", (d) => (stdout += d));
   child.stderr.on("data", (d) => (stdout += d));
@@ -260,7 +263,7 @@ try {
   check(kitWiths.length === 2 && kitWiths.every((w) => Object.keys(w).every((k) => declared.has(k))), "MLITech workflow uses the action in both jobs, only with declared inputs");
   check(kitDoc.jobs.pr.env.QA_ALLOW_MUTATIONS === "true" && !kitDoc.jobs.staging.env?.QA_ALLOW_MUTATIONS, "MLITech workflow allows write requests only on the throwaway PR backend");
   check(kitWiths[1]["platform-accounts"] === "true" && !JSON.stringify(kitDoc.jobs.staging).includes("_PASS"), "MLITech staging takes passwords from the platform, none from GitHub");
-  const kitCfg = (await import(path.join(kit, "qa.config.ts"))).default;
+  const kitCfg = (await import(pathToFileURL(path.join(kit, "qa.config.ts")).href)).default;
   check(kitCfg.backend.dir === "." && kitCfg.allowMutations === false && ["merchantA", "merchantB", "customer", "admin"].every((a) => a in kitCfg.accounts), "MLITech qa.config.ts: repo-root backend, read-only by default, the four account names");
   const actionlintKit = process.env.ACTIONLINT;
   if (actionlintKit && fs.existsSync(actionlintKit)) {

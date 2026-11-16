@@ -17,6 +17,7 @@ import type { Finding, QaPlugin } from "../core/types.js";
 import type { RunContext } from "../core/context.js";
 import type { WebAppConfig } from "../core/config.js";
 import { login, slugOf } from "../web/crawler.js";
+import { chromiumLaunchOptions } from "../web/browser-options.js";
 
 const freePort = () =>
   new Promise<number>((resolve, reject) => {
@@ -83,12 +84,12 @@ async function auditApp(ctx: RunContext, app: WebAppConfig, findings: Finding[],
   fs.mkdirSync(outDir, { recursive: true });
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "qa-lh-"));
   const port = await freePort();
-  const extraArgs = process.env.QA_CHROMIUM_ARGS ? process.env.QA_CHROMIUM_ARGS.split(/\s+/).filter(Boolean) : [];
+  const browserOptions = chromiumLaunchOptions();
   // A persistent profile is the browser's default context, which Lighthouse's new tabs share (login cookies, storage)
   const context = await chromium.launchPersistentContext(profile, {
-    executablePath: process.env.QA_CHROMIUM_PATH || undefined,
+    ...browserOptions,
     headless: true,
-    args: [`--remote-debugging-port=${port}`, ...extraArgs],
+    args: [...(browserOptions.args ?? []), `--remote-debugging-port=${port}`],
     viewport: ctx.config.web.viewport,
   });
   try {

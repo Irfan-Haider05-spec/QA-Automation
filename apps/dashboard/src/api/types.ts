@@ -27,6 +27,7 @@ export interface Run {
   id: string; environmentId: string | null; suite: string; source: string; status: RunStatus; target: string | null; startedAt: string; durationMs: number;
   routesTotal: number; routesSelected: number; selectionReason: string; fullCoverage: boolean; requests: number; gateFailOn: Severity; blocking: number;
   newIssues: number; fixedIssues: number; envError: string | null; git: GitInfo | null; createdAt: string;
+  evidenceStatus: "pending" | "complete" | "failed"; evidenceError: string | null;
   trigger: RunTrigger | null; deploymentId: string | null; deployment: { id: string; sha: string | null; ref: string | null; version: string | null; url: string | null; createdAt: string } | null;
 }
 export interface GitInfo { sha?: string; ref?: string; pr?: string; repo?: string; ciUrl?: string }
@@ -39,7 +40,7 @@ export interface Finding {
   id: string; plugin: string; severity: Severity; category: string; title: string; detail: string | null; target: string; fingerprint: string;
   evidence: Record<string, any> | null; known: boolean; issueId: string | null; issueStatus: IssueStatus | null;
 }
-export interface RunDetail extends Run { plugins: PluginResult[]; findings: Finding[] }
+export interface RunDetail extends Run { plugins: PluginResult[]; findings: Finding[]; artifacts?: Array<{ id: string; name: string; size: number; expiresAt: string; downloadUrl: string | null }> }
 export interface Issue {
   id: string; fingerprint: string; plugin: string; severity: Severity; category: string; title: string; target: string; status: IssueStatus;
   statusReason: string | null; statusUntil: string | null; assigneeId: string | null; assigneeName: string | null; firstSeenAt: string; lastSeenAt: string;

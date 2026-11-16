@@ -17,26 +17,41 @@
  *                                                        comment, "QA gate" commit status, step outputs
  *                                                        (GITHUB_TOKEN; QA_GITHUB_COMMENT/QA_GITHUB_STATUS=false to skip)
  *   qa plugins                                           list available plugins
+ *   qa init                                              write a safe starter config (never overwrite)
+ *   qa flow-import --app <name> --name <flow> --url <base> --out <file.mjs>
+ *                                                        convert Playwright Test source from stdin; never overwrite
+ *   qa uptime-export --file <history.jsonl> [--from ISO] [--to ISO] [--target "GET /health"]
+ *                    [--outcome up|slow|down|check-error] [--limit 1-1000] [--cursor <next>]
+ *                                                        page through stored uptime observations as JSON
+ *   qa record --app <name> --name <flow> --url <base> --out <file.mjs> [--channel chrome]
+ *                                                        open Inspector and a local review/paste handoff
  *
  * Exit codes: 0 gate passed · 1 gate failed · 2 usage/config error · 3 target unreachable
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
+import { spawn, execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { loadConfig } from "./core/config.js";
 import { makeLogger, type RunContext } from "./core/context.js";
 import { HttpClient } from "./core/http.js";
 import { AuthProvider } from "./core/auth.js";
 import { runPlugins } from "./core/runner.js";
+import { exportUptimeHistory, resolveStorePath } from "./core/observation-history.js";
 import { gate, loadKnownIssues, triage, writeBaseline } from "./core/triage.js";
 import { writeReports, type RunSummary } from "./core/report.js";
-import { fetchAccounts, reportDeployment, uploadRun, type UploadResult } from "./core/upload.js";
+import { fetchAccounts, reportDeployment, uploadRun, uploadArtifacts, type UploadResult } from "./core/upload.js";
 import { buildProfile, routesFromProfile } from "./core/profile.js";
 import { annotations, appendFileEnv, githubContext, gitInfo, prCommentBody, setCommitStatus, statusFor, triggerFrom, upsertPrComment, writeOutputs } from "./core/github.js";
 import { changedFiles, selectRoutes } from "./core/changes.js";
 import { discoverRoutes } from "./discovery/express-routes.js";
+import { importRoutes } from "./discovery/import.js";
+import { loadPlugins } from "./core/plugin-sdk.js";
 import { buildOpenApi } from "./discovery/openapi.js";
 import { PLUGINS, pluginByName } from "./plugins/index.js";
+import { convertRecording } from "./core/record-flow.js";
+import { startRecorderSession } from "./core/recorder-session.js";
 import type { Suite } from "./core/types.js";
 
 const { values: opt, positionals } = parseArgs({
@@ -48,7 +63,7 @@ const { values: opt, positionals } = parseArgs({
     "backend-dir": { type: "string" },
     "changed-from": { type: "string" },
     only: { type: "string" },
-    out: { type: "string", default: "qa-out" },
+    out: { type: "string" },
     "allow-mutations": { type: "boolean" },
     baseline: { type: "boolean", default: false },
     "update-visual": { type: "boolean", default: false },
@@ -61,9 +76,19 @@ const { values: opt, positionals } = parseArgs({
     "routes-file": { type: "string" },
     verbose: { type: "boolean", short: "v", default: false },
     url: { type: "string" },
+    app: { type: "string" },
+    name: { type: "string" },
+    channel: { type: "string" },
     path: { type: "string", default: "/health" },
     timeout: { type: "string", default: "900" },
     fresh: { type: "boolean", default: false },
+    file: { type: "string" },
+    from: { type: "string" },
+    to: { type: "string" },
+    target: { type: "string" },
+    outcome: { type: "string" },
+    limit: { type: "string" },
+    cursor: { type: "string" },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -99,9 +124,13 @@ async function setup(withDiscovery = true) {
     platformAccounts: await platformAccounts(),
   });
   if (fromPlatform.length) log.info(`Test accounts from the platform: ${fromPlatform.join(", ")}`);
-  const outDir = path.resolve(opt.out!);
+  const outDir = path.resolve(opt.out ?? "qa-out");
   fs.mkdirSync(outDir, { recursive: true });
   // Without source (hosted runner): the route list comes from a project profile
+  if (config.discovery) {
+    const imported = importRoutes(configDir, config.discovery);
+    return { config, configDir, outDir, routes: imported.routes, fromSource: false };
+  }
   if (opt["routes-file"]) {
     const routes = routesFromProfile(JSON.parse(fs.readFileSync(opt["routes-file"], "utf8")));
     log.info(`${routes.length} routes from ${path.basename(opt["routes-file"])} (no source)`);
@@ -118,8 +147,14 @@ async function setup(withDiscovery = true) {
 }
 
 async function cmdDiscover() {
-  const { config, outDir, routes } = await setup();
+  const { config, configDir, outDir, routes } = await setup();
   fs.writeFileSync(path.join(outDir, "routes.json"), JSON.stringify(routes.map(({ routerFile, ...r }) => r), null, 2));
+  if (config.discovery?.format === "openapi") {
+    const imported = importRoutes(configDir, config.discovery);
+    fs.writeFileSync(path.join(outDir, "openapi.json"), JSON.stringify(imported.document, null, 2));
+    log.info(`${routes.length} imported routes; original OpenAPI contract preserved in ${path.join(outDir, "openapi.json")}`);
+    return 0;
+  }
   const oa = await buildOpenApi(routes, { title: `${config.project} API`, serverUrl: config.target.baseUrl, outFile: path.join(outDir, "openapi.json") });
   log.info(`${routes.length} routes → ${path.join(outDir, "routes.json")}`);
   log.info(`OpenAPI → ${oa.file} (request schemas from zod: ${oa.zodResolved}${oa.zodFailedFiles.length ? `, ${oa.zodFailedFiles.length} validation file(s) not loadable: install backend node_modules for full schemas` : ""})`);
@@ -130,12 +165,14 @@ async function cmdRun() {
   const started = Date.now();
   const suite = opt.suite as Suite;
   const { config, configDir, outDir, routes, fromSource } = await setup();
+  config.pluginSettings ??= {};
+  const registry = await loadPlugins(PLUGINS, config.plugins ?? [], configDir, config.pluginSettings);
 
   const names = opt.only ? opt.only.split(",").map((s) => s.trim()) : config.suites[suite];
   if (!names?.length) throw new Error(`Suite "${suite}" has no plugins in ${opt.config}`);
-  const unknown = names.filter((n) => !pluginByName.has(n));
+  const unknown = names.filter((n) => !registry.has(n));
   if (unknown.length) throw new Error(`Unknown plugin(s): ${unknown.join(", ")}. Run "qa plugins".`);
-  const plugins = names.map((n) => pluginByName.get(n)!);
+  const plugins = names.map((n) => registry.get(n)!);
 
   // Route selection from the git diff
   let targetRoutes = routes;
@@ -151,8 +188,14 @@ async function cmdRun() {
 
   let openapiPath: string | undefined;
   if (plugins.some((p) => p.needs?.includes("openapi"))) {
+    if (config.discovery?.format === "openapi") {
+      const imported = importRoutes(configDir, config.discovery);
+      openapiPath = path.join(outDir, "openapi.json");
+      fs.writeFileSync(openapiPath, JSON.stringify(imported.document, null, 2));
+    } else {
     const oa = await buildOpenApi(routes, { title: `${config.project} API`, serverUrl: config.target.baseUrl, outFile: path.join(outDir, "openapi.json") });
     openapiPath = oa.file;
+    }
   }
 
   const ctx: RunContext = { suite, config, configDir, outDir, routes, targetRoutes, changedFiles: files, openapiPath, log, selectedPlugins: names, updateVisual: !!opt["update-visual"] };
@@ -184,7 +227,7 @@ async function cmdRun() {
     startedAt: new Date(started).toISOString(), durationMs: Date.now() - started,
     routesTotal: routes.length, routesSelected: targetRoutes.length, selectionReason,
     requests: ctx.http?.requestCount ?? 0, results,
-    gate: { failOn: config.gate.failOn, passed: g.blocking.length === 0 && !envError, blocking: g.blocking.length, envError },
+    gate: { failOn: config.gate.failOn, passed: g.blocking.length === 0 && !g.errors.length && !envError, blocking: g.blocking.length, envError },
     git: gh ? gitInfo(gh) : { sha: process.env.GITHUB_SHA, ref: process.env.GITHUB_REF_NAME, pr: process.env.QA_PR_NUMBER },
   };
   writeReports(outDir, summary);
@@ -209,13 +252,15 @@ async function cmdRun() {
         const profile = fromSource && routes.length ? buildProfile(config, routes) : undefined;
         uploaded = await uploadRun(summary, { ...p, trigger, deploymentId, profile });
         log.info(`Uploaded to platform: run ${uploaded.runId} · ${uploaded.newIssues} new, ${uploaded.fixedIssues} fixed, ${uploaded.reopenedIssues} reopened issue(s)${uploaded.runUrl ? ` · ${uploaded.runUrl}` : ""}`);
+        try { log.info(`Evidence uploaded: ${await uploadArtifacts(summary, outDir, uploaded.runId, p)} file(s)`); }
+        catch (e) { log.warn(`Run stored, but evidence upload was incomplete: ${(e as Error).message}. Preserve the local report artifact.`); }
       } catch (e: any) {
         // The quality gate stays authoritative: an upload problem is reported, not turned into a test failure
         log.warn(`Upload failed: ${e?.message ?? e}`);
       }
     }
   }
-  const code = envError ? 3 : g.blocking.length ? 1 : 0;
+  const code = envError ? 3 : g.blocking.length || g.errors.length ? 1 : 0;
   if (opt.github) await github(summary, { backendDir: config.backend.dir, outDir, runUrl: uploaded?.runUrl ?? null, code });
   return code;
 }
@@ -281,12 +326,78 @@ function cmdPlugins() {
   return 0;
 }
 
+function cmdInit() {
+  const file = path.resolve(opt.config!);
+  const source = `// VeriQ: edit the URL, API document and dedicated QA account below.\nexport default {\n  project: "My project",\n  backend: false,\n  discovery: { format: "openapi", file: "./openapi.json" },\n  target: { baseUrl: process.env.QA_BASE_URL, requestsPerMinute: 60 },\n  login: { path: "/auth/login", tokenPath: "accessToken" },\n  accounts: {},\n  allowMutations: false,\n  disposable: false,\n  pluginSettings: {},\n  suites: { local: ["api-smoke", "data-exposure", "validation-coverage"] },\n};\n`;
+  fs.writeFileSync(file, source, { flag: "wx" });
+  log.info(`Created ${file}. Supply an OpenAPI document and QA_BASE_URL; see docs/PLUGINS.md.`);
+  return 0;
+}
+
 function help() {
   console.log(fs.readFileSync(new URL(import.meta.url), "utf8").split("*/")[0].replace(/^#!.*\n\/\*\*?/, "").replace(/^ \* ?/gm, ""));
   return 0;
 }
 
-const commands: Record<string, () => Promise<number> | number> = { run: cmdRun, discover: cmdDiscover, "wait-for": cmdWaitFor, plugins: cmdPlugins, help };
+async function cmdFlowImport() {
+  if (!opt.app || !opt.name || !opt.url || !opt.out || !opt.out.endsWith(".mjs")) throw new Error("flow-import requires --app, --name, --url and --out <file.mjs>");
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const bytes = Buffer.from(chunk); size += bytes.length;
+    if (size > 256_000) throw new Error("Recording exceeds 256 KB");
+    chunks.push(bytes);
+  }
+  const converted = convertRecording(Buffer.concat(chunks).toString("utf8"), { app: opt.app, name: opt.name, baseUrl: opt.url });
+  fs.writeFileSync(path.resolve(opt.out), converted.source, { flag: "wx", mode: 0o600 });
+  log.info(`Flow created. Review before execution. Required inputs: ${converted.variables.join(", ") || "none"}`);
+  return 0;
+}
+
+async function cmdRecord() {
+  if (!opt.app || !opt.name || !opt.url || !opt.out?.endsWith(".mjs")) throw new Error("record requires --app, --name, --url and --out <file.mjs>");
+  const url = new URL(opt.url);
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Use an HTTP(S) URL without credentials, query or fragment");
+  if (opt.channel && !["chrome", "msedge", "chromium"].includes(opt.channel)) throw new Error("Unsupported browser channel");
+  const output = path.resolve(opt.out);
+  if (fs.existsSync(output)) throw new Error("Output already exists; choose a new flow filename");
+  const session = await startRecorderSession({ app: opt.app, name: opt.name, baseUrl: opt.url, output });
+  const require = createRequire(import.meta.url);
+  const cli = path.join(path.dirname(require.resolve("playwright/package.json")), "cli.js");
+  const args = [cli, "codegen", "--target", "playwright-test", ...(opt.channel ? ["--channel", opt.channel] : []), opt.url];
+  const child = spawn(process.execPath, args, { shell: false, windowsHide: true, stdio: "ignore" });
+  let launchFailed = false;
+  child.once("error", () => { launchFailed = true; session.cancel(); });
+  child.once("exit", code => { if (code !== 0 && code !== null) { launchFailed = true; session.cancel(); } });
+  const cancel = () => session.cancel();
+  process.once("SIGINT", cancel); process.once("SIGTERM", cancel);
+  log.info(`Record in Playwright Inspector, then copy its Playwright Test code. Open ${session.url} to paste, validate and save. Ctrl+C cancels. Session expires in 15 minutes.`);
+  try {
+    const result = await session.done;
+    if (launchFailed) throw new Error("Recorder browser could not start. Install Playwright Chromium or select --channel chrome/msedge.");
+    log.info(result.saved ? `Flow saved; required inputs: ${result.variables.join(", ") || "none"}` : "Recording cancelled; no flow saved.");
+    return result.saved ? 0 : 130;
+  } finally {
+    process.removeListener("SIGINT", cancel); process.removeListener("SIGTERM", cancel);
+    session.cancel();
+    if (child.exitCode === null && child.pid) {
+      if (process.platform === "win32") {
+        try { execFileSync(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 5000 }); } catch { child.kill(); }
+      } else child.kill("SIGTERM");
+    }
+  }
+}
+
+function cmdUptimeExport() {
+  if (!opt.file) throw new Error("uptime-export requires --file <history.jsonl>");
+  const file = resolveStorePath(process.cwd(), opt.file);
+  if (opt.limit !== undefined && !/^\d{1,4}$/.test(opt.limit)) throw new Error("--limit must be an integer from 1 to 1000");
+  const page = exportUptimeHistory(file, { from: opt.from, to: opt.to, target: opt.target, outcome: opt.outcome as never, cursor: opt.cursor, limit: opt.limit === undefined ? 100 : Number(opt.limit) });
+  process.stdout.write(JSON.stringify(page, null, 2) + "\n");
+  return 0;
+}
+
+const commands: Record<string, () => Promise<number> | number> = { run: cmdRun, discover: cmdDiscover, "wait-for": cmdWaitFor, plugins: cmdPlugins, init: cmdInit, record: cmdRecord, "flow-import": cmdFlowImport, "uptime-export": cmdUptimeExport, help };
 const fn = opt.help ? help : commands[cmd];
 if (!fn) {
   console.error(`Unknown command "${cmd}". Try: qa help`);

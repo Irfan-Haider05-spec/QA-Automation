@@ -12,11 +12,28 @@ import type { Db } from "../db/index.js";
 import { withContext } from "../db/index.js";
 import type { Config } from "../config.js";
 import { nextRun } from "./schedule.js";
+import { hostedQuota, recordRunUsage, type BillingConfig } from "./billing.js";
+import { ApiError } from "./http.js";
 
 export interface TickResult { enqueued: number; skipped: number; requeued: number; failed: number; cancelled: number }
 
-export async function schedulerTick(db: Db, config: Pick<Config, "JOB_STALE_SECONDS">, now = new Date()): Promise<TickResult> {
+export async function schedulerTick(db: Db, config: Pick<Config, "JOB_STALE_SECONDS"> & Partial<BillingConfig>, now = new Date()): Promise<TickResult> {
   const [m] = await withContext(db, {}, (q) => q<{ requeued: number; failed: number; cancelled: number }>("select * from qa_maintain_jobs($1)", [config.JOB_STALE_SECONDS]));
+  const terminal = await withContext(db, {}, (q) => q<{ id: string; org_id: string }>("select * from qa_unaccounted_hosted_jobs(100)"));
+  for (const job of terminal) {
+    await withContext(db, { orgId: job.org_id }, async (q) => {
+      const [claimed] = await q<{ runtime_ms: number | string; attempts: number }>(
+        "update run_jobs set usage_accounted_at = now() where id = $1 and status in ('cancelled','error') and usage_accounted_at is null returning runtime_ms, attempts",
+        [job.id],
+      );
+      if (!claimed) return;
+      // Jobs cancelled or rejected before a runner claim release their reservation
+      // without consuming a run; started jobs are charged for server-measured time.
+      if (claimed.attempts <= 0) return;
+      const durationMs = Math.max(0, Number(claimed.runtime_ms));
+      await recordRunUsage(q, durationMs, true, config.BILLING_PLANS ? { BILLING_PLANS: config.BILLING_PLANS } : undefined);
+    });
+  }
   const due = await withContext(db, {}, (q) => q<{ id: string; org_id: string; cron: string; timezone: string; next_run_at: Date }>("select * from qa_due_schedules(100)"));
   let enqueued = 0;
   let skipped = 0;
@@ -43,6 +60,11 @@ export async function schedulerTick(db: Db, config: Pick<Config, "JOB_STALE_SECO
         skipped++;
         await q("update schedules set last_error = 'Skipped: the environment''s domain is not verified' where id = $1", [s.id]);
         return;
+      }
+      try { await hostedQuota(q, config.BILLING_PLANS ? { BILLING_PLANS: config.BILLING_PLANS } : undefined); }
+      catch (e) {
+        if (!(e instanceof ApiError) || e.code !== "quota_exceeded") throw e;
+        skipped++; await q("update schedules set last_error = $1 where id = $2", [e.message, s.id]); return;
       }
       const [job] = await q<{ id: string }>(
         `insert into run_jobs (org_id, project_id, environment_id, schedule_id, suite, trigger_type) values (app_org(), $1, $2, $3, $4, 'schedule') returning id`,

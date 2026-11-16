@@ -50,7 +50,10 @@ EXPOSE 8080
 
 # ── Hosted runner: the engine plus Chromium for dashboard checks ──────────────
 FROM mcr.microsoft.com/playwright:v1.63.0-noble AS runner
-ENV NODE_ENV=production QA_CHROMIUM_ARGS="--no-sandbox --disable-dev-shm-usage"
+# Chromium sandboxing is opt-in via QA_CHROMIUM_SANDBOX=true. The host/container
+# runtime must support unprivileged user namespaces and a seccomp profile that
+# permits Chromium's sandbox; this image alone does not establish isolation.
+ENV NODE_ENV=production QA_CHROMIUM_ARGS="--disable-dev-shm-usage"
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./

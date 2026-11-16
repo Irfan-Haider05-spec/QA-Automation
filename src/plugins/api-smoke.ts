@@ -14,6 +14,18 @@ export const apiSmokePlugin: QaPlugin = {
   layer: "api",
   description: "GET every parameter-free route with the right role: no 5xx, not slow",
   needs: ["baseUrl"],
+  async confirm(ctx, finding) {
+    const route = ctx.targetRoutes.find((r) => routeKey(r) === finding.target && r.method === "GET");
+    if (!route || !/^(Server error|No response|Slow response)/.test(finding.title)) return "inconclusive";
+    const account = route.authRequired ? ctx.auth!.accountForRoles(route.roles) : undefined;
+    const headers = account ? await ctx.auth!.header(account) : undefined;
+    if (route.authRequired && !headers) return "inconclusive";
+    const res = await ctx.http!.send({ method: "GET", path: fillParams(route.path, ctx.config.target.pathParams), headers, retry: false });
+    if (res.networkError || res.status >= 500) return "confirmed";
+    if (res.status < 200 || res.status >= 300 || res.json?.success === false) return "inconclusive";
+    if (finding.title.startsWith("Slow response") && res.ms > ctx.config.target.slowMs) return "confirmed";
+    return "cleared";
+  },
   async run(ctx) {
     const http = ctx.http!;
     const auth = ctx.auth!;

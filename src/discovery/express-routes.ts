@@ -125,13 +125,50 @@ function analyseHandlers(args: readonly ts.Expression[], sf: ts.SourceFile, impo
   return out;
 }
 
-function parseRouterFile(file: string, mount: string, module: string, ctx: Ctx) {
-  const key = `${file}@${mount}`;
+/** Keep the imported binding, not just its source file: a file may export several routers. */
+function importedName(sf: ts.SourceFile, local: string): string | undefined {
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st)) continue;
+    if (st.importClause?.name?.text === local) return "default";
+    const bindings = st.importClause?.namedBindings;
+    if (bindings && ts.isNamedImports(bindings)) {
+      const item = bindings.elements.find((el) => el.name.text === local);
+      if (item) return (item.propertyName ?? item.name).text;
+    }
+  }
+  return undefined;
+}
+
+function exportedRouter(sf: ts.SourceFile, name: string | undefined, routers: Set<string>): string | undefined {
+  if (!name) return undefined;
+  const aliases = new Map<string, string>();
+  for (const st of sf.statements) {
+    if (ts.isExportAssignment(st) && ts.isIdentifier(st.expression)) aliases.set("default", st.expression.text);
+    if (ts.isVariableStatement(st)) for (const d of st.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.initializer && ts.isIdentifier(d.initializer)) aliases.set(d.name.text, d.initializer.text);
+    }
+    if (ts.isExportDeclaration(st) && !st.moduleSpecifier && st.exportClause && ts.isNamedExports(st.exportClause)) {
+      for (const el of st.exportClause.elements) aliases.set(el.name.text, (el.propertyName ?? el.name).text);
+    }
+  }
+  const seen = new Set<string>();
+  while (!routers.has(name) && aliases.has(name) && !seen.has(name)) { seen.add(name); name = aliases.get(name)!; }
+  return routers.has(name) ? name : undefined;
+}
+
+function parseRouterFile(file: string, mount: string, module: string, ctx: Ctx, exportName?: string) {
+  const key = `${file}@${mount}#${exportName ?? ""}`;
   if (ctx.visited.has(key)) return;
   ctx.visited.add(key);
   const sf = read(file);
   const imports = importsOf(sf);
-  const routers = routerVars(sf);
+  const allRouters = routerVars(sf);
+  const selected = exportedRouter(sf, exportName, allRouters);
+  if (!selected && allRouters.size > 1) {
+    ctx.warnings.push(`${path.relative(ctx.backendDir, file)}: cannot resolve router export ${exportName ?? "(unknown)"}; ambiguous routes skipped`);
+    return;
+  }
+  const routers = selected ? new Set([selected]) : allRouters;
   let order = 0;
 
   const addRoute = (method: string, routePath: string, handlerArgs: readonly ts.Expression[], node: ts.Node) => {
@@ -168,7 +205,8 @@ function parseRouterFile(file: string, mount: string, module: string, ctx: Ctx) 
         let inner: ts.Expression = target;
         while (ts.isCallExpression(inner) && ts.isPropertyAccessExpression(inner.expression) && METHODS.has(inner.expression.name.text)) inner = inner.expression.expression;
         if (ts.isCallExpression(inner) && ts.isPropertyAccessExpression(inner.expression) && inner.expression.name.text === "route" && inner.arguments[0] && ts.isStringLiteralLike(inner.arguments[0])) {
-          addRoute(method, inner.arguments[0].text, n.arguments, n);
+          const owner = inner.expression.expression;
+          if (ts.isIdentifier(owner) && (routers.has(owner.text) || routers.size === 0)) addRoute(method, inner.arguments[0].text, n.arguments, n);
         }
       }
       // router.use('/sub', SubRoutes)
@@ -176,7 +214,7 @@ function parseRouterFile(file: string, mount: string, module: string, ctx: Ctx) 
         const [first, ...rest] = n.arguments;
         if (first && ts.isStringLiteralLike(first)) {
           for (const r of rest) {
-            if (ts.isIdentifier(r) && imports.has(r.text)) parseRouterFile(imports.get(r.text)!, joinPath(mount, first.text), module, ctx);
+            if (ts.isIdentifier(r) && imports.has(r.text)) parseRouterFile(imports.get(r.text)!, joinPath(mount, first.text), module, ctx, importedName(sf, r.text));
           }
         }
       }
@@ -226,7 +264,7 @@ export function discoverRoutes(opts: { backendDir: string; routesIndex: string; 
       ctx.warnings.push(`routes index: cannot resolve import for ${m.ident}`);
       continue;
     }
-    parseRouterFile(file, joinPath(opts.apiPrefix, m.path), moduleNameFor(file, opts.backendDir), ctx);
+    parseRouterFile(file, joinPath(opts.apiPrefix, m.path), moduleNameFor(file, opts.backendDir), ctx, importedName(sf, m.ident));
   }
 
   // App-level routes (health check etc.)

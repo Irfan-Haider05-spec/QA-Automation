@@ -82,10 +82,19 @@ and run `npm run api:migrate` before `npm run api:dev`.
 | `LOG_FORMAT` | – | `json` in production, `off` in tests, `text` otherwise | request logs: `json`, `text` or `off` |
 | `METRICS_TOKEN` | – | – | turns on `GET /metrics` (Prometheus), Bearer token ≥ 16 chars |
 | `APP_URL` | – | – | public dashboard URL, e.g. `https://qa.example.com`; runs then return a `runUrl` used in PR comments and commit statuses |
+| `ARTIFACT_BUCKET` | – | – | private S3-compatible bucket; unset disables cloud evidence uploads |
+| `ARTIFACT_REGION` / `ARTIFACT_ENDPOINT` | – | `us-east-1` / SDK default | custom endpoint must use HTTPS without URL credentials |
+| `ARTIFACT_PATH_STYLE` | – | `false` | path-style addressing for compatible storage providers |
+| `ARTIFACT_RETENTION_DAYS` | – | `30` | private evidence expiry, 1–365 days; deletion retries retain metadata |
 
 Server deployment (Docker, HTTPS, backups): [`deploy/README.md`](../../deploy/README.md).
 
 Keep these in your own `.env` file or your host's secret settings; never commit them.
+
+Object storage credentials use the AWS SDK credential chain. Restrict the service
+identity to the private evidence bucket. Migration `009_artifacts.sql` adds scoped
+metadata and cleanup tombstones. See [evidence behavior](../../docs/PLUGINS.md#evidence-storage)
+for limits, upload paths, signed downloads and current hosted-run limitations.
 
 ## How customer data is kept apart
 
@@ -166,6 +175,22 @@ and only a hint is ever returned. Webhook requests carry `X-QA-Event`, `X-QA-Del
 `X-QA-Timestamp` and `X-QA-Signature: sha256=HMAC(secret, "{timestamp}.{body}")`.
 Outgoing URLs must be https, resolve to public addresses, and redirects aren't followed.
 Messages never include request/response evidence.
+
+## Identity, billing and collaboration checkpoint
+
+Migrations through `014_hosted_runtime.sql` add MFA, explicitly linked OIDC
+identities, versioned session revocation, subscriptions/usage, collaboration outbox,
+and hosted evidence/runtime accounting. Run migrations before starting this API;
+test upgrades against an isolated restored database before deployment.
+
+External integrations remain optional and provider-neutral. See
+[operational acceptance](../../docs/OPERATIONAL-ACCEPTANCE.md) for OIDC, private
+storage, `BILLING_PLANS`, payment event signing and the issue bridge contract.
+`deploy/.env.example` documents the optional settings. No live prices, charges,
+provider credentials or AI integration are enabled by this checkpoint.
+
+Use [validation](../../docs/VALIDATION.md) for tested behavior and
+[the continuation prompt](../../docs/REMAINING-WORK-PROMPT.md) for remaining work.
 
 ## Reports
 

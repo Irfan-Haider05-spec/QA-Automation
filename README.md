@@ -1,28 +1,49 @@
-# MLITech QA Agent
+# VeriQ QA Platform
 
-> **Platform (Phase A):** this folder now also holds the QA platform. `apps/api` is the
+VeriQ combines a deterministic QA engine, a multi-tenant API, a React dashboard,
+and a hosted job runner. It tests APIs and web apps, imports scanner/test reports,
+tracks findings across runs, and gives CI a quality gate. AI is disabled.
+
+**Current implementation:** 45 plugins (18 original + 27 additions), OpenAPI/Postman
+imports, multiple CLI authentication strategies, a versioned local plugin SDK,
+private S3-compatible evidence storage, platform MFA/OIDC, configurable plan quotas,
+hosted evidence, issue discussions/snapshot delivery, trends/exports, and the
+supplied VeriQ green/navy branding. External integrations are optional and disabled
+until configured; prices and deployment remain deferred.
+Some checks wrap external report formats; registration alone is not test coverage.
+
+- [Run and configure the 26 additions](docs/PLUGINS.md)
+- [Architecture and delivery status](docs/ARCHITECTURE.md)
+- [Validation results and root-cause fixes](docs/VALIDATION.md)
+- [Implementation plan](docs/IMPLEMENTATION-PLAN.md)
+- [Current checkpoint and remaining-work prompt](docs/REMAINING-WORK-PROMPT.md)
+- [External-service and deployment acceptance](docs/OPERATIONAL-ACCEPTANCE.md)
+
+> **Platform:** this folder also holds the QA platform. `apps/api` is the
 > multi-tenant control-plane API (organizations, clients, projects, environments,
 > credentials vault, runs, issues). See [apps/api/README.md](apps/api/README.md).
 > The engine below uploads runs to it with `--upload`.
 
-A plugin-first QA agent for the MLITech backend. It finds the routes in the
-source code, decides which checks to run, runs them against a live API, triages
+A plugin-first QA agent originally built for the MLITech backend. It finds routes
+in Express source or imports OpenAPI/Postman definitions, selects checks, runs them
+against the configured API and web apps, triages
 the results and posts one report with a pass/fail gate.
 
-**It makes zero LLM calls.** Every check uses a deterministic tool or rule, so a
-run costs CI minutes only, however many routes or runs per day.
+**It makes zero LLM calls.** Every check uses a deterministic tool or rule.
+Infrastructure and external scanner costs depend on your setup; no AI provider
+or AI usage charge is required by this engine.
 
 ```
 discover routes (TS AST) → select by git diff → run plugins → triage → report + gate
 ```
 
-## What it checks (18 plugins)
+## Original checks (18 plugins)
 
 | Plugin | Type | What it catches |
 |---|---|---|
 | `route-auth` | static | Routes without `auth()` that are not on the public allowlist, privileged routes without roles, routes with no handler, routes shadowed by an earlier `/:param` route, duplicates |
 | `env-drift` | static | Env vars the code reads but `.env.example` doesn't document, and likely name mismatches (`DATABASE_URL` vs `MONGODB_URI`) |
-| `secrets` | static | Committed `.env` files and hard-coded keys (uses `gitleaks` if installed, built-in rules otherwise) |
+| `secrets` | static | Committed `.env` files and hard-coded keys (built-in rules plus `gitleaks` when installed) |
 | `deps` | static | `npm audit` on the backend lockfile |
 | `health-cors` | live | Health check, security headers, CORS rejects unknown origins and allows the dashboards |
 | `api-auth` | live | Every protected route returns 401 without a token or with a bad token, and 403 for a disallowed role. Confirms unprotected routes live |

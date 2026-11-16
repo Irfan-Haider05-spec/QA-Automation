@@ -4,6 +4,8 @@ import { createApp } from "./app.js";
 import { startScheduler } from "./lib/scheduler.js";
 import { startDispatcher } from "./lib/notify/dispatch.js";
 import { Vault } from "./lib/crypto.js";
+import { artifactStore, startArtifactCleanup } from "./lib/artifacts.js";
+import { startIssueSync } from "./lib/issue-sync.js";
 
 let config: ReturnType<typeof loadConfig>;
 try {
@@ -35,7 +37,9 @@ const stopScheduler = config.SCHEDULER_ENABLED ? startScheduler(db, config, (m) 
 if (!config.RUNNER_TOKEN) console.log("[api] RUNNER_TOKEN not set: hosted runs are disabled (jobs stay queued)");
 
 const stopDispatcher = startDispatcher(db, new Vault(config.VAULT_MASTER_KEY), config, (m) => console.log(`[notify] ${m}`));
+const stopArtifactCleanup = startArtifactCleanup(db, artifactStore(config));
+const stopIssueSync = startIssueSync(db, config);
 
-const shutdown = () => { stopScheduler(); stopDispatcher(); server.close(() => db.close().then(() => process.exit(0))); };
+const shutdown = () => { stopScheduler(); stopDispatcher(); stopArtifactCleanup(); stopIssueSync(); server.close(() => db.close().then(() => process.exit(0))); };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

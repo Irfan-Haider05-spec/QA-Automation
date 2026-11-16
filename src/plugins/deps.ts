@@ -14,6 +14,7 @@ const MAP: Record<string, Severity> = { critical: "high", high: "medium", modera
 export const depsPlugin: QaPlugin = {
   name: "deps",
   layer: "static",
+  needs: ["backendDir"],
   description: "npm audit on the backend lockfile",
   skipReason(ctx) {
     return fs.existsSync(path.join(ctx.config.backend.dir, "package-lock.json")) ? null : "no package-lock.json in backend";

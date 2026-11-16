@@ -26,6 +26,7 @@ function shadows(a: string, b: string) {
 export const routeAuthPlugin: QaPlugin = {
   name: "route-auth",
   layer: "static",
+  needs: ["backendDir"],
   description: "Static audit of auth, roles, missing handlers and route shadowing",
   async run(ctx) {
     const findings: Finding[] = [];

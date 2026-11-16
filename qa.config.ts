@@ -4,6 +4,7 @@
  * (GitHub Actions secrets in CI, a local .env.qa when running by hand).
  */
 import { defineConfig } from "./src/core/config.js";
+import { EXPANDED_PLUGINS } from "./src/plugins/expanded/index.js";
 
 const env = (k: string) => process.env[k] || undefined;
 
@@ -165,7 +166,7 @@ export default defineConfig({
     // After each staging deploy: live checks against the deployed environment
     staging: ["health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "web-crawl", "flows"],
     // Nightly: everything, including fuzzing
-    nightly: ["route-auth", "env-drift", "secrets", "deps", "health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "load-smoke", "zap-baseline", "api-fuzz", "web-crawl", "web-a11y", "web-visual", "lighthouse", "flows", "mobile"],
+    nightly: ["route-auth", "env-drift", "secrets", "deps", "health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "load-smoke", "zap-baseline", "api-fuzz", "web-crawl", "web-a11y", "web-visual", "lighthouse", "flows", "mobile", ...EXPANDED_PLUGINS.map((p) => p.name)],
     // Manual runs from a laptop
     local: ["route-auth", "env-drift", "secrets", "deps", "health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "zap-baseline", "web-crawl", "web-a11y"],
   },
@@ -173,5 +174,9 @@ export default defineConfig({
   gate: { failOn: "high" },
   // Only true on the throwaway CI database (the PR workflow sets QA_ALLOW_MUTATIONS=true)
   allowMutations: false,
+  disposable: false,
+  // Configure active probes/reports explicitly. Missing settings are reported as
+  // skipped, not as a pass. See docs/PLUGINS.md and examples/veriq.config.ts.
+  pluginSettings: {},
   knownIssuesFile: "known-issues.json",
 });

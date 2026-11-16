@@ -26,13 +26,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
 import type { Finding, QaPlugin } from "../core/types.js";
 import type { RunContext } from "../core/context.js";
 import type { WebAppConfig } from "../core/config.js";
 import { login, slugOf } from "../web/crawler.js";
+import { chromiumLaunchOptions } from "../web/browser-options.js";
+import { expect } from "playwright/test";
 
 export interface FlowContext {
+  expect: typeof expect;
   page: Page;
   /** Name a step; a failure inside it is reported with this name */
   step: <T>(name: string, fn: () => Promise<T> | T) => Promise<T>;
@@ -71,20 +74,28 @@ export const flowsPlugin: QaPlugin = {
   },
   async run(ctx) {
     const F = ctx.config.flows;
+    const engines = { chromium, firefox, webkit };
+    const browsers = F.browsers ?? ["chromium"];
+    if (!Array.isArray(browsers) || !browsers.length || browsers.length > 3 || new Set(browsers).size !== browsers.length || browsers.some((b) => !Object.hasOwn(engines, b))) {
+      throw new Error("flows.browsers must contain 1–3 unique supported browsers: chromium, firefox, webkit");
+    }
     const dir = path.resolve(ctx.configDir, F.dir);
     const shots = path.join(ctx.outDir, "flows");
     fs.mkdirSync(shots, { recursive: true });
     const findings: Finding[] = [];
     const stats: Record<string, string | number> = { passed: 0, failed: 0, skipped: 0 };
+    for (const browserName of browsers) {
     let browser: Browser | undefined;
     try {
       for (const file of listFlowFiles(dir)) {
-        const rel = path.relative(ctx.configDir, file);
+        const rel = path.relative(ctx.configDir, file).replace(/\\/g, "/");
         let flow: FlowFile;
         try {
           const mod = await import(pathToFileURL(file).href);
           flow = mod.default ?? mod.flow;
           if (!flow?.name || typeof flow.run !== "function") throw new Error("export default { name, app, run } expected");
+          // Imported modules are cached; never mutate the exported flow object.
+          flow = { ...flow, name: browsers.length > 1 ? `${flow.name} [${browserName}]` : flow.name };
         } catch (e) {
           findings.push({ plugin: this.name, severity: "medium", category: "config", target: `flow ${rel}`, title: `Flow file can't be loaded: ${(e as Error).message.split("\n")[0]}`, evidence: { file: rel } });
           stats.failed = Number(stats.failed) + 1;
@@ -109,10 +120,7 @@ export const flowsPlugin: QaPlugin = {
           continue;
         }
 
-        browser ??= await chromium.launch({
-          executablePath: process.env.QA_CHROMIUM_PATH || undefined,
-          args: process.env.QA_CHROMIUM_ARGS ? process.env.QA_CHROMIUM_ARGS.split(/\s+/).filter(Boolean) : undefined,
-        });
+        browser ??= await engines[browserName].launch(browserName === "chromium" ? chromiumLaunchOptions() : {});
         const context = await browser.newContext({ viewport: ctx.config.web.viewport, baseURL: app.baseUrl.replace(/\/?$/, "/"), locale: "en-US" });
         context.setDefaultTimeout(F.stepTimeoutMs);
         const page = await context.newPage();
@@ -130,13 +138,14 @@ export const flowsPlugin: QaPlugin = {
         const steps: string[] = [];
         const started = Date.now();
         let failure: string | undefined;
+        let deadline: ReturnType<typeof setTimeout> | undefined;
         try {
           if (flow.login !== false) {
             const err = await login(page, { ...app, account }, ctx);
             if (err) throw new Error(err);
           }
           const fctx: FlowContext = {
-            page, app, account,
+            page, app, account, expect,
             step: async (name, fn) => {
               if (depth === 0) current = name;
               depth++;
@@ -152,10 +161,12 @@ export const flowsPlugin: QaPlugin = {
           };
           await Promise.race([
             flow.run(fctx),
-            new Promise((_, rej) => setTimeout(() => rej(new Error(`flow took longer than ${F.timeoutMs} ms`)), F.timeoutMs)),
+            new Promise((_, rej) => { deadline = setTimeout(() => rej(new Error(`flow took longer than ${F.timeoutMs} ms`)), F.timeoutMs); }),
           ]);
         } catch (e) {
           failure = String((e as Error).message ?? e).split("\n")[0].slice(0, 300);
+        } finally {
+          clearTimeout(deadline);
         }
         const ms = Date.now() - started;
         const shot = path.join(shots, `${slugOf("/" + flow.name)}.png`);
@@ -191,6 +202,7 @@ export const flowsPlugin: QaPlugin = {
       }
     } finally {
       await browser?.close().catch(() => {});
+    }
     }
     return { findings, stats };
   },

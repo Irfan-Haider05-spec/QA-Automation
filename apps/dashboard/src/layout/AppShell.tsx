@@ -9,12 +9,8 @@ import { api } from "../api/client";
 const ROLE_NAME = { owner: "Owner", admin: "Admin", developer: "Developer", viewer: "Viewer" } as const;
 
 export const Logo = () => (
-  <svg width="24" height="24" viewBox="0 0 32 32" aria-hidden="true">
-    <rect width="32" height="32" rx="7" fill="var(--accent)" />
-    <rect x="7" y="9" width="3" height="14" rx="1.5" fill="#fff" />
-    <rect x="12.5" y="13" width="3" height="10" rx="1.5" fill="#fff" />
-    <rect x="18" y="7" width="3" height="16" rx="1.5" fill="#fff" />
-    <rect x="23.5" y="15" width="3" height="8" rx="1.5" fill="#f59e0b" />
+  <svg className="veriq-logo" width="156" height="52" viewBox="240 210 1280 440" role="img" aria-label="VeriQ">
+    <image href="/branding/veriq-wordmark.png" width="1774" height="887" />
   </svg>
 );
 
@@ -109,7 +105,7 @@ export function AppShell() {
   return (
     <div className="shell">
       <aside className="rail" aria-label="Main navigation">
-        <div className="brand"><Logo /> QA Platform</div>
+        <div className="brand"><Logo /></div>
         <OrgSwitcher />
         <nav>
           <NavLink to={base} end>Overview</NavLink>

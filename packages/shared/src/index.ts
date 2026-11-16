@@ -4,6 +4,7 @@
  * schema, so all three sides validate the same shape.
  */
 import { z } from "zod";
+export * from "./billing.js";
 
 // ─── Roles & permissions ──────────────────────────────────────────────────────
 
@@ -46,8 +47,13 @@ export const FindingUploadSchema = z.object({
   target: z.string().max(500),
   category: z.string().max(40),
   fingerprint: z.string().min(6).max(64),
-  evidence: z.record(z.unknown()).optional(),
+  evidence: z.record(z.string(), z.unknown()).optional(),
   known: z.object({ reason: z.string(), since: z.string().optional() }).optional(),
+  confidence: z.enum(["high", "medium", "low"]).optional(),
+  cwe: z.array(z.string().regex(/^CWE-\d+$/)).max(20).optional(),
+  owasp: z.array(z.string().max(100)).max(20).optional(),
+  remediation: z.string().max(5000).optional(),
+  flaky: z.boolean().optional(),
 });
 
 export const PluginResultUploadSchema = z.object({
@@ -56,7 +62,7 @@ export const PluginResultUploadSchema = z.object({
   reason: z.string().max(2000).optional(),
   durationMs: z.number().int().nonnegative(),
   findings: z.array(FindingUploadSchema).max(5000),
-  stats: z.record(z.union([z.number(), z.string()])).optional(),
+  stats: z.record(z.string(), z.union([z.number(), z.string()])).optional(),
 });
 
 export const RUN_TRIGGERS = ["pr", "push", "deploy", "schedule", "manual"] as const;
@@ -109,13 +115,25 @@ export const ProfileRouteSchema = z.object({
   middlewares: z.array(z.string().max(200)).max(50),
 }).passthrough();
 
+export { HostedSettingsSchema } from "./hosted-settings.js";
+import { HostedSettingsSchema } from "./hosted-settings.js";
+const LoginBodyTemplateSchema = z.record(z.string(), z.string().max(200)).superRefine((template, ctx) => {
+  const sensitive = /(password|secret|token|api[-_]?key|credential)/i;
+  const placeholder = /^\{\{(?:identifier|password|token|accessToken|apiKey)\}\}$/;
+  for (const [key, value] of Object.entries(template)) {
+    if (sensitive.test(key) && !placeholder.test(value)) ctx.addIssue({ code: "custom", path: [key], message: "Sensitive login fields must use a credential placeholder" });
+  }
+});
 export const ProjectProfileSchema = z.object({
   version: z.literal(1),
   apiPrefix: z.string().max(200),
   healthPath: z.string().max(200),
-  login: z.object({ path: z.string().max(300), tokenPath: z.string().max(200), bodyTemplate: z.record(z.string().max(200)).optional() }),
+  login: z.object({ path: z.string().max(300), tokenPath: z.string().max(200), bodyTemplate: LoginBodyTemplateSchema.optional(),
+    strategy: z.enum(["bearer", "cookie", "api-key"]).optional(), cookieNames: z.array(z.string().regex(/^[a-z0-9_-]+$/i)).min(1).max(10).optional(), headerName: z.string().regex(/^[a-z0-9-]+$/i).max(100).optional() }),
+  hostedSettings: HostedSettingsSchema.optional(),
+  hostedUnsupportedReason: z.string().max(300).optional(),
   /** Account names with their app role; never identifiers or passwords */
-  accounts: z.record(z.object({ role: z.string().max(100), device: z.string().max(100).optional() })),
+  accounts: z.record(z.string(), z.object({ role: z.string().max(100), device: z.string().max(100).optional(), credentialType: z.enum(["password", "api-key", "access-token"]).optional() })),
   publicRoutes: z.array(z.string().max(500)).max(1000),
   privilegedPrefixes: z.array(z.string().max(300)).max(200),
   tenantIsolation: z.object({
@@ -125,7 +143,7 @@ export const ProjectProfileSchema = z.object({
     maxIdsPerRoute: z.number().int().min(1).max(20),
   }),
   cors: z.object({ allowedOrigins: z.array(z.string().max(300)).max(50), probeOrigin: z.string().max(300) }),
-  pathParams: z.record(z.string().max(300)),
+  pathParams: z.record(z.string(), z.string().max(300)),
   gateFailOn: SeveritySchema,
   web: z.object({
     slowMs: z.number().int().positive(),

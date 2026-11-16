@@ -59,8 +59,8 @@ export function triage(results: PluginResult[], known: KnownIssue[]) {
 
 export function gate(results: PluginResult[], failOn: Severity) {
   const all = results.flatMap((r) => r.findings);
-  const blocking = all.filter((f) => !f.known && severityRank(f.severity) <= severityRank(failOn));
-  return { all, blocking, newFindings: all.filter((f) => !f.known) };
+  const blocking = all.filter((f) => !f.known && !f.flaky && severityRank(f.severity) <= severityRank(failOn));
+  return { all, blocking, errors: results.filter((r) => r.status === "errored"), newFindings: all.filter((f) => !f.known) };
 }
 
 /** Write every current finding into the known-issues file (used once when adopting the agent) */

@@ -37,7 +37,7 @@ RunnerRouter.post(
         const [d] = await q("select id from deployments where id = $1 and project_id = $2", [req.body.deploymentId, runner.projectId]);
         if (!d) throw notFound("Deployment");
       }
-      const result = await ingestRun(q, runner.projectId, runner.apiKeyId, req.body);
+      const result = await ingestRun(q, runner.projectId, runner.apiKeyId, { ...req.body, source: req.body.source === "hosted" ? "ci" : req.body.source }, deps(req).config);
       if (req.body.profile) {
         // Latest route list + non-secret config, for hosted runs
         await q(

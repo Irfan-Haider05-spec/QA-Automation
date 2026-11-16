@@ -14,7 +14,7 @@ export interface Readiness {
 }
 
 export async function readiness(q: Query, projectId: string, env: { id: string; name: string; verified_at: Date | null; api_base_url: string | null; web_apps: unknown[] | null }): Promise<Readiness> {
-  const [profile] = await q<{ routes_count: number }>("select routes_count from project_profiles where project_id = $1", [projectId]);
+  const [profile] = await q<{ routes_count: number; profile: { hostedUnsupportedReason?: string } }>("select routes_count, profile from project_profiles where project_id = $1", [projectId]);
   const [{ n: accounts }] = await q<{ n: number }>("select count(*)::int as n from credentials where environment_id = $1", [env.id]);
   const reasons: string[] = [];
   const verified = !!env.verified_at;
@@ -25,5 +25,6 @@ export async function readiness(q: Query, projectId: string, env: { id: string; 
   const web = (env.web_apps ?? []).length > 0;
   if ((api || web) && accounts === 0) reasons.push("No test accounts on this environment: only checks that need no login will run.");
   if (!api && !web) reasons.push("Nothing to test yet: add an API URL (and run CI once) or a dashboard to this environment.");
-  return { canRun: verified && (api || web), api, web, reasons };
+  if (profile?.profile.hostedUnsupportedReason) reasons.push(profile.profile.hostedUnsupportedReason);
+  return { canRun: verified && (api || web) && !profile?.profile.hostedUnsupportedReason, api, web, reasons };
 }

@@ -7,7 +7,8 @@ interface AuthState {
   status: "loading" | "signed-in" | "signed-out";
   user: User | null;
   orgs: OrgSummary[];
-  login(email: string, password: string): Promise<void>;
+  login(email: string, password: string): Promise<string | undefined>;
+  verifyMfa(challenge: string, code: string): Promise<void>;
   signup(input: { name: string; email: string; password: string; orgName?: string; createOrg?: boolean; inviteToken?: string }): Promise<{ orgId: string | null }>;
   logout(): Promise<void>;
   reload(): Promise<void>;
@@ -43,6 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signedOut = useCallback(() => {
+    ++seq.current; // An in-flight /auth/me response cannot restore a signed-out session.
     session.clear();
     qc.clear();
     setUser(null);
@@ -63,10 +65,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       status, user, orgs, reload,
       async login(email, password) {
-        const r = await api<{ tokens: { accessToken: string; refreshToken: string } }>("POST", "/auth/login", { email, password });
+        const r = await api<{ tokens: { accessToken: string; refreshToken: string }; mfaRequired?: boolean; challenge?: string }>("POST", "/auth/login", { email, password });
+        if (r.mfaRequired) return r.challenge;
         session.set(r.tokens);
         qc.clear();
         await reload();
+      },
+      async verifyMfa(challenge, code) {
+        const r = await api<{ tokens: { accessToken: string; refreshToken: string } }>("POST", "/auth/mfa/verify", { challenge, code });
+        session.set(r.tokens); qc.clear(); await reload();
       },
       async signup(input) {
         const r = await api<{ tokens: { accessToken: string; refreshToken: string }; org: { id: string } | null }>("POST", "/auth/signup", input);

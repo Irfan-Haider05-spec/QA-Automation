@@ -50,6 +50,7 @@ export function ProjectSettingsTab() {
           <p className="muted small">Project ID <span className="mono">{project.id}</span></p>
         </form>
       </section>
+      {can("projects.delete") && <IssueIntegrationSettings key={project.id} />}
       {can("projects.delete") && (
         <section className="panel" aria-labelledby="pd-h">
           <div className="panel-head"><h2 id="pd-h">Delete project</h2></div>
@@ -71,3 +72,4 @@ export function ProjectSettingsTab() {
     </div>
   );
 }
+import { IssueIntegrationSettings } from "./Collaboration";

@@ -8,14 +8,14 @@
   --paper: #f4f6f9;
   --surface: #ffffff;
   --sunken: #eef1f6;
-  --ink: #121a2b;
+  --ink: #052451;
   --ink-2: #3b4558;
   --muted: #5a6478; /* readable on sunken and selected rows too */
   --rule: #dde2ea;
-  --accent: #2346d8;
-  --accent-hover: #1c39b4;
+  --accent: #007957;
+  --accent-hover: #005d44;
   --accent-ink: #ffffff;
-  --accent-soft: #e7ecfc;
+  --accent-soft: #e0f5ec;
   --pass: #1f8a4c;
   --fail: #c4321f;
   --env: #b7791f;
@@ -29,7 +29,7 @@
   --danger-soft: #fdecea;
   --ok-soft: #e6f4ec;
   --warn-soft: #fbf1df;
-  --focus: #2346d8;
+  --focus: #007957;
   --shadow-pop: 0 12px 32px rgba(18, 26, 43, 0.16), 0 2px 6px rgba(18, 26, 43, 0.08);
   --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
   --body: "IBM Plex Sans", "Segoe UI", Roboto, sans-serif;
@@ -40,20 +40,20 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --paper: #0f141d; --surface: #161c27; --sunken: #1b2230; --ink: #e6eaf1; --ink-2: #c2c9d6; --muted: #8d97a8; --rule: #273042;
-    --accent: #7d97ff; --accent-hover: #9aafff; --accent-ink: #0f141d; --accent-soft: #1e284a;
+    --accent: #43d6a2; --accent-hover: #7be9c1; --accent-ink: #052451; --accent-soft: #11372e;
     --pass: #4cc38a; --fail: #ff7a66; --env: #f0b35a; --none: #3a4457;
     --sev-critical: #ff6b6b; --sev-high: #ff9150; --sev-medium: #f0b35a; --sev-low: #9aa8c4; --sev-info: #6b7588;
-    --danger: #ff7a66; --danger-soft: #3a1c19; --ok-soft: #132c20; --warn-soft: #36290f; --focus: #9aafff;
+    --danger: #ff7a66; --danger-soft: #3a1c19; --ok-soft: #132c20; --warn-soft: #36290f; --focus: #43d6a2;
     --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --paper: #0f141d; --surface: #161c27; --sunken: #1b2230; --ink: #e6eaf1; --ink-2: #c2c9d6; --muted: #8d97a8; --rule: #273042;
-  --accent: #7d97ff; --accent-hover: #9aafff; --accent-ink: #0f141d; --accent-soft: #1e284a;
+  --accent: #43d6a2; --accent-hover: #7be9c1; --accent-ink: #052451; --accent-soft: #11372e;
   --pass: #4cc38a; --fail: #ff7a66; --env: #f0b35a; --none: #3a4457;
   --sev-critical: #ff6b6b; --sev-high: #ff9150; --sev-medium: #f0b35a; --sev-low: #9aa8c4; --sev-info: #6b7588;
-  --danger: #ff7a66; --danger-soft: #3a1c19; --ok-soft: #132c20; --warn-soft: #36290f; --focus: #9aafff;
+  --danger: #ff7a66; --danger-soft: #3a1c19; --ok-soft: #132c20; --warn-soft: #36290f; --focus: #43d6a2;
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
 }
@@ -83,6 +83,7 @@ code, .mono { font-family: var(--mono); font-size: 0.9em; }
 .rail { background: var(--surface); border-right: 1px solid var(--rule); display: flex; flex-direction: column; gap: 4px; padding: 14px 10px; position: sticky; top: 0; height: 100vh; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 12px; font-family: var(--display); font-weight: 700; font-size: 16px; color: var(--ink); }
 .brand svg { flex: none; }
+.veriq-logo { background: #fff; border-radius: 6px; }
 .rail nav { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
 .rail nav a { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; color: var(--ink-2); font-weight: 500; }
 .rail nav a:hover { background: var(--sunken); text-decoration: none; }

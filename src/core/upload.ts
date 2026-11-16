@@ -12,6 +12,10 @@
 import type { RunSummary } from "./report.js";
 import type { AccountConfig } from "./config.js";
 import type { ProjectProfile } from "./profile.js";
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { readBoundedText } from "@qa/shared/http";
 
 export interface PlatformOptions {
   url: string;
@@ -44,8 +48,9 @@ async function call<T>(o: PlatformOptions, method: string, p: string, body?: unk
     headers: { ...(body ? { "content-type": "application/json" } : {}), authorization: `Bearer ${o.apiKey}` },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(60000),
+    redirect: "error",
   });
-  const text = await res.text();
+  const text = await readBoundedText(res, 8 * 1024 * 1024);
   let json: any;
   try { json = JSON.parse(text); } catch { /* not JSON */ }
   if (!res.ok) throw new Error(`platform answered ${res.status}: ${json?.error?.message ?? text.slice(0, 200)}`);
@@ -63,6 +68,37 @@ export async function uploadRun(summary: RunSummary, o: UploadOptions): Promise<
     profile: o.profile,
   });
   return { ...r, runUrl: r.runUrl ?? null };
+}
+
+/** Upload only report-linked screenshots and generated Lighthouse reports. Paths
+ * are resolved on disk to reject both traversal and symlink escapes. */
+export async function uploadArtifacts(summary: RunSummary, outDir: string, runId: string, o: PlatformOptions): Promise<number> {
+  return sendArtifacts(summary, outDir, (payload) => call(o, "POST", `/runner/runs/${encodeURIComponent(runId)}/artifacts`, payload));
+}
+
+export interface ArtifactPayload { name: string; sha256: string; data: string }
+export async function sendArtifacts(summary: RunSummary, outDir: string, send: (payload: ArtifactPayload) => Promise<unknown>): Promise<number> {
+  const root = fs.realpathSync(outDir);
+  const names = new Set(summary.results.flatMap((r) => r.findings.flatMap((f) => f.evidence?.image ? [f.evidence.image.replace(/\\/g, "/")] : [])));
+  const lighthouse = path.join(root, "lighthouse");
+  if (fs.existsSync(lighthouse)) for (const file of fs.readdirSync(lighthouse)) if (/^[a-zA-Z0-9_.-]+\.html$/.test(file)) names.add(`lighthouse/${file}`);
+  if (names.size > 100) throw new Error("More than 100 evidence files; keep the full CI artifact and reduce page/flow limits");
+  const payloads = [...names].map((name) => {
+    if (path.isAbsolute(name) || name.split("/").some((s) => s === ".." || s === "." || !s) || !/\.(png|jpe?g|webp|html)$/i.test(name)) throw new Error("Unsafe evidence path");
+    const file = fs.realpathSync(path.resolve(root, name));
+    const relative = path.relative(root, file);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Evidence file escapes the report directory");
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size < 1 || stat.size > 5242880) throw new Error("Evidence file must be between 1 byte and 5 MiB");
+    return { name, file };
+  });
+  let uploaded = 0;
+  for (const { name, file } of payloads) {
+    const data = fs.readFileSync(file);
+    await send({ name, sha256: createHash("sha256").update(data).digest("hex"), data: data.toString("base64") });
+    uploaded++;
+  }
+  return uploaded;
 }
 
 export async function reportDeployment(

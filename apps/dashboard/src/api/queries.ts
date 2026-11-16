@@ -34,7 +34,7 @@ export const keys = {
 };
 
 /** Public: whether new accounts can be created without an invite */
-export const useSignupOptions = () => useQuery({ queryKey: ["auth-options"], queryFn: () => api<{ signupOpen: boolean; emailVerification?: boolean; passwordReset?: boolean }>("GET", "/auth/options"), staleTime: 60_000 });
+export const useSignupOptions = () => useQuery({ queryKey: ["auth-options"], queryFn: () => api<{ signupOpen: boolean; emailVerification?: boolean; passwordReset?: boolean; ssoEnabled?: boolean }>("GET", "/auth/options"), staleTime: 60_000 });
 export const useMe = (enabled = true) => useQuery({ queryKey: keys.me, queryFn: () => api<{ user: User; orgs: OrgSummary[] }>("GET", "/auth/me"), enabled });
 export const useOrg = (o: string) => useQuery({ queryKey: keys.org(o), queryFn: () => api<{ org: Org }>("GET", `/orgs/${o}`).then((r) => r.org) });
 export const useClients = (o: string) => useQuery({ queryKey: keys.clients(o), queryFn: () => api<{ clients: Client[] }>("GET", `/orgs/${o}/clients`).then((r) => r.clients) });

@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Types and zod schemas shared by the engine, the platform API and the dashboard",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "zod": "^3.23.8" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./http": "./src/http.ts"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
 }

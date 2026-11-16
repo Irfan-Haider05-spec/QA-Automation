@@ -8,6 +8,8 @@ import type { Server } from "node:http";
 import { loadConfig } from "../src/config.js";
 import { openDb, migrate, type Db } from "../src/db/index.js";
 import { createApp } from "../src/app.js";
+import type { ArtifactStore } from "../src/lib/artifacts.js";
+import type { IdentityProvider } from "../src/lib/identity.js";
 
 export interface TestApi {
   url: string;
@@ -51,7 +53,7 @@ async function realPostgres() {
   };
 }
 
-export async function startApi(extraEnv: Record<string, string> = {}): Promise<TestApi> {
+export async function startApi(extraEnv: Record<string, string> = {}, artifacts?: ArtifactStore, identity?: IdentityProvider): Promise<TestApi> {
   const vaultKey = crypto.randomBytes(32).toString("base64");
   const config = loadConfig({
     NODE_ENV: "test",
@@ -65,7 +67,7 @@ export async function startApi(extraEnv: Record<string, string> = {}): Promise<T
   const db = pgReal?.db ?? (await openDb(config.DATABASE_URL));
   if (!pgReal) await migrate(db);
   const server: Server = await new Promise((resolve) => {
-    const s = createApp(db, config).listen(0, "127.0.0.1", () => resolve(s));
+    const s = createApp(db, config, artifacts, identity).listen(0, "127.0.0.1", () => resolve(s));
   });
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const call: TestApi["call"] = async (method, path, opts = {}) => {

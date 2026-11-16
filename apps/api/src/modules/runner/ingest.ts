@@ -11,6 +11,7 @@
  */
 import type { RunUpload } from "@qa/shared";
 import type { Query } from "../../db/index.js";
+import { recordRunUsage, type BillingConfig } from "../../lib/billing.js";
 
 export interface IngestResult {
   runId: string;
@@ -23,8 +24,9 @@ export interface IngestResult {
   reopenedIssueIds: string[];
 }
 
-export async function ingestRun(q: Query, projectId: string, apiKeyId: string | null, run: RunUpload): Promise<IngestResult> {
-  const status = run.gate.envError ? "env_error" : run.gate.passed ? "passed" : "failed";
+export async function ingestRun(q: Query, projectId: string, apiKeyId: string | null, run: RunUpload, billing?: BillingConfig): Promise<IngestResult> {
+  await recordRunUsage(q, run.durationMs, apiKeyId === null, billing);
+  const status = run.gate.envError ? "env_error" : run.gate.passed && !run.results.some((p) => p.status === "errored") ? "passed" : "failed";
   const fullCoverage = run.routesSelected >= run.routesTotal;
   const [r] = await q<{ id: string }>(
     `insert into runs (org_id, project_id, environment_id, api_key_id, suite, source, status, target, started_at, duration_ms, routes_total, routes_selected,
@@ -54,6 +56,14 @@ export async function ingestRun(q: Query, projectId: string, apiKeyId: string | 
       if (seen.has(f.fingerprint)) continue;
       seen.add(f.fingerprint);
       findingCount++;
+      const evidence = { ...f.evidence, veriq: { confidence: f.confidence, cwe: f.cwe, owasp: f.owasp, remediation: f.remediation, flaky: f.flaky ?? false } };
+      if (f.flaky) {
+        // Keep transient failures visible without opening/reopening issues. Their
+        // fingerprints remain seen so a flaky run cannot mark a real issue fixed.
+        await q("insert into findings (org_id, run_id, plugin, severity, category, title, detail, target, fingerprint, evidence, known) values (app_org(), $1, $2, $3, $4, $5, $6, $7, $8, $9, false)",
+          [runId, f.plugin, f.severity, f.category, f.title, f.detail ?? null, f.target, f.fingerprint, JSON.stringify(evidence)]);
+        continue;
+      }
       const [issue] = await q<{ id: string; inserted: boolean; reopened: boolean }>(
         `with prev as (select status, status_until from issues where project_id = $1 and fingerprint = $2)
          insert into issues (org_id, project_id, fingerprint, plugin, severity, category, title, target, status, status_reason, first_seen_run_id, last_seen_run_id)
@@ -79,7 +89,7 @@ export async function ingestRun(q: Query, projectId: string, apiKeyId: string | 
       else if (issue.reopened) { reopenedIssues++; reopenedIssueIds.push(issue.id); }
       await q(
         "insert into findings (org_id, run_id, issue_id, plugin, severity, category, title, detail, target, fingerprint, evidence, known) values (app_org(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
-        [runId, issue.id, f.plugin, f.severity, f.category, f.title, f.detail ?? null, f.target, f.fingerprint, f.evidence ? JSON.stringify(f.evidence) : null, !!f.known],
+        [runId, issue.id, f.plugin, f.severity, f.category, f.title, f.detail ?? null, f.target, f.fingerprint, JSON.stringify(evidence), !!f.known],
       );
     }
   }

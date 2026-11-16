@@ -10,7 +10,8 @@ import { z } from "zod";
 import { HOSTED_SUITES } from "@qa/shared";
 import { auth } from "../../middleware/auth.js";
 import { conflict, handle, notFound, unprocessable, validate } from "../../lib/http.js";
-import { audit, loadEnvironment, loadProject, scoped } from "../../lib/context.js";
+import { audit, deps, loadEnvironment, loadProject, scoped } from "../../lib/context.js";
+import { hostedQuota } from "../../lib/billing.js";
 import { readiness } from "./readiness.js";
 
 export const JobsRouter = Router({ mergeParams: true });
@@ -47,6 +48,7 @@ JobsRouter.post(
       if (!r.canRun) throw unprocessable(r.reasons.join(" "));
       const [dup] = await q("select id from run_jobs where environment_id = $1 and suite = $2 and status in ('queued', 'running')", [environmentId, suite]);
       if (dup) throw conflict(`A ${suite} run of ${env.name} is already queued or running`);
+      await hostedQuota(q, deps(req).config);
       const [{ id }] = await q<{ id: string }>(
         "insert into run_jobs (org_id, project_id, environment_id, suite, trigger_type, requested_by) values (app_org(), $1, $2, $3, 'manual', $4) returning id",
         [req.params.projectId, environmentId, suite, req.user!.id],

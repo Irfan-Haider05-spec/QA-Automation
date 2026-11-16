@@ -4,6 +4,9 @@ import { api, session } from "../api/client";
 import { useSignupOptions } from "../api/queries";
 import { useAuth } from "../auth/AuthProvider";
 import { Button, ErrorAlert, Field, Input, Modal, useToast } from "../components/ui";
+import { MfaSettings } from "./account/MfaSettings";
+import { SsoSettings } from "./account/SsoSettings";
+import { RevokeSessions } from "./account/RevokeSessions";
 
 function Profile() {
   const { user, reload } = useAuth();
@@ -110,6 +113,9 @@ export function AccountPage() {
       <div className="page-head"><div><h1>Your account</h1></div></div>
       <Profile />
       <Password />
+      <MfaSettings />
+      <SsoSettings />
+      <RevokeSessions />
       <DeleteAccount />
     </div>
   );

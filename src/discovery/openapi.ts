@@ -8,6 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { toJSONSchema } from "zod";
 import type { RouteInfo } from "../core/types.js";
 
 const toOpenApiPath = (p: string) => p.replace(/:([A-Za-z0-9_]+)/g, "{$1}");
@@ -38,7 +39,7 @@ async function loadZod(r: RouteInfo, cache: Map<string, any>, failures: Set<stri
 }
 
 const jsonSchema = (z: any) => {
-  const s: any = zodToJsonSchema(z, { target: "openApi3", $refStrategy: "none" });
+  const s: any = z._zod ? toJSONSchema(z, { target: "openapi-3.0", unrepresentable: "any" }) : zodToJsonSchema(z, { target: "openApi3", $refStrategy: "none" });
   delete s.$schema;
   return s;
 };

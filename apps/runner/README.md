@@ -40,12 +40,30 @@ QA_PLATFORM_URL=https://qa.example.com QA_RUNNER_TOKEN=<same token> npm run runn
 | `QA_RUNNER_ID` | `host-pid` | shown on jobs and in the audit log |
 | `QA_RUNNER_POLL_MS` | `5000` | wait between empty polls |
 | `QA_JOB_TIMEOUT_MIN` | `20` | engine is stopped after this |
+| `QA_RUNNER_MAX_JOBS` | unlimited | exit after 1–1000 attempted jobs; use `1` for an ephemeral worker |
 | `QA_RUNNER_WORKDIR` | OS temp | job folders (deleted after each job) |
 | `QA_CHROMIUM_PATH`, `QA_CHROMIUM_ARGS` | – | browser for dashboard checks (or `npx playwright install chromium`) |
+| `QA_CHROMIUM_SANDBOX` | Playwright default | explicit `true` or `false`; `true` rejects contradictory `--no-sandbox` flags |
 
 One runner process runs one job at a time; start more processes or machines for
 parallel jobs. A runner that dies mid-job is detected by missing heartbeats
 (`JOB_STALE_SECONDS` on the API): the job is retried once, then marked failed.
+
+Hosted profiles retain supported bearer, cookie, API-key and static-token metadata;
+credentials travel only in the child environment. Unsupported executable/custom
+authentication blocks readiness with a reason. Six additional bounded checks are
+supported; see [architecture](../../docs/ARCHITECTURE.md) for that subset.
+
+Evidence is uploaded under the assigned job after completion, with a 15-minute
+window. A lost completion response can be recovered from the assigned-job result.
+Incomplete uploads remain visible on the run. There is no durable disk spool yet:
+if both completion and recovery fail, temporary evidence can be lost. This is the
+first task in [the continuation prompt](../../docs/REMAINING-WORK-PROMPT.md).
+
+One-job mode does not itself provide a sandbox. The Kubernetes manifest in
+`deploy/isolated-runner.yaml` is an example, not a verified deployment. Follow
+[operational acceptance](../../docs/OPERATIONAL-ACCEPTANCE.md) before running
+untrusted targets in shared infrastructure.
 
 ## Tests
 

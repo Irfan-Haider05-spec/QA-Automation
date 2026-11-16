@@ -6,6 +6,7 @@ import type { IssueDetail, Severity } from "../../api/types";
 import { useCurrentOrg } from "../../lib/org";
 import { Button, Empty, ErrorAlert, Field, IssueStatusLabel, Loading, SeverityLabel, useToast, When } from "../../components/ui";
 import { Evidence } from "./RunDetail";
+import { IssueDiscussion } from "./Collaboration";
 
 const STATUSES: Array<[string, string]> = [["open", "Open"], ["known", "Accepted"], ["ignored", "Ignored"], ["fixed", "Fixed"], ["all", "All"]];
 const SEVS: Severity[] = ["critical", "high", "medium", "low", "info"];
@@ -92,6 +93,7 @@ function IssuePanel({ issueId }: { issueId: string }) {
             <dt>Fingerprint</dt><dd className="mono">{q.data!.fingerprint}</dd>
           </dl>
           <Triage issue={q.data!} />
+          <IssueDiscussion key={issueId} issueId={issueId} />
           {q.data!.history[0] && (
             <div style={{ display: "grid", gap: 8 }}>
               <h3>Latest evidence</h3>

@@ -1,5 +1,6 @@
 /** The hosted-runner side of the platform API (/api/v1/hosted) */
 import type { ClaimPayload } from "./job.js";
+import { readBoundedText } from "@qa/shared/http";
 
 export class PlatformClient {
   constructor(private url: string, private token: string, readonly runnerId: string) {}
@@ -10,8 +11,9 @@ export class PlatformClient {
       headers: { authorization: `Bearer ${this.token}`, "x-runner-id": this.runnerId, ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(60000),
+      redirect: "error",
     });
-    const text = await res.text();
+    const text = await readBoundedText(res, 8 * 1024 * 1024);
     let json: any;
     try { json = text ? JSON.parse(text) : undefined; } catch { /* not JSON */ }
     return { status: res.status, json, message: json?.error?.message ?? text.slice(0, 200) };
@@ -33,8 +35,28 @@ export class PlatformClient {
   }
 
   async complete(jobId: string, body: { run?: unknown; error?: string }) {
-    const r = await this.call("POST", `/jobs/${jobId}/complete`, body);
-    if (r.status !== 200) throw new Error(`complete → ${r.status}: ${r.message}`);
-    return r.json as { status: string; runId: string | null };
+    try {
+      const r = await this.call("POST", `/jobs/${jobId}/complete`, body);
+      if (r.status !== 200) throw new Error(`complete → ${r.status}: ${r.message}`);
+      return r.json as { status: string; runId: string | null };
+    } catch (error) {
+      // The server may have committed before the response was lost. Recover the
+      // assigned job's stored run id so local evidence can still be uploaded.
+      try {
+        const recovery = await this.call("GET", `/jobs/${encodeURIComponent(jobId)}/result`);
+        if (recovery.status === 200) return recovery.json as { status: string; runId: string | null };
+      } catch { /* preserve the original completion failure */ }
+      throw error;
+    }
+  }
+
+  async uploadArtifact(jobId: string, payload: { name: string; sha256: string; data: string }) {
+    const r = await this.call("POST", `/jobs/${encodeURIComponent(jobId)}/artifacts`, payload);
+    if (r.status !== 201) throw new Error(`evidence upload → ${r.status}: ${r.message}`);
+  }
+
+  async setEvidenceStatus(jobId: string, status: "complete" | "failed") {
+    const r = await this.call("POST", `/jobs/${encodeURIComponent(jobId)}/evidence-status`, { status });
+    if (r.status !== 200) throw new Error(`evidence status → ${r.status}: ${r.message}`);
   }
 }

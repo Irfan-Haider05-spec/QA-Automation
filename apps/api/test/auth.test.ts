@@ -61,6 +61,7 @@ test("refresh tokens rotate; reusing an old one signs out every session", async 
   const replay = await api.call("POST", "/auth/refresh", { body: { refreshToken: u.refresh } });
   assert.equal(replay.status, 401);
   assert.equal(replay.body.error.code, "token_reused");
+  assert.equal((await api.call("GET", "/auth/me", { token: r2.body.tokens.accessToken })).status, 401, "Reuse must invalidate already-issued access JWTs");
   // The newest token was revoked too
   const after = await api.call("POST", "/auth/refresh", { body: { refreshToken: r2.body.tokens.refreshToken } });
   assert.equal(after.status, 401);

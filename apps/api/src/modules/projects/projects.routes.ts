@@ -6,7 +6,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { auth } from "../../middleware/auth.js";
 import { badRequest, handle, validate, zName } from "../../lib/http.js";
-import { audit, loadProject, scoped } from "../../lib/context.js";
+import { audit, deps, loadProject, scoped } from "../../lib/context.js";
+import { projectQuota } from "../../lib/billing.js";
 import type { Query } from "../../db/index.js";
 
 export const ProjectsRouter = Router({ mergeParams: true });
@@ -54,6 +55,7 @@ ProjectsRouter.post(
     const b = req.body;
     const project = await scoped(req, async (q) => {
       await checkClient(q, b.clientId, req.member!.clientIds);
+      await projectQuota(q, deps(req).config);
       const [p] = await q("insert into projects (org_id, client_id, name, repo_url, stack) values (app_org(), $1, $2, $3, coalesce($4, 'node-express')) returning id", [b.clientId ?? null, b.name, b.repoUrl ?? null, b.stack ?? null]);
       await audit(q, req, "project.created", "project", p.id, { name: b.name });
       const [full] = await q(`select ${PROJECT_COLUMNS} from projects p left join clients c on c.id = p.client_id where p.id = $1`, [p.id]);

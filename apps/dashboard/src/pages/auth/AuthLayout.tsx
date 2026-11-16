@@ -9,7 +9,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
     <div className="auth">
       <div className="auth-form">
         <div className="inner">
-          <div className="brand" style={{ padding: 0 }}><Logo /> QA Platform</div>
+          <div className="brand" style={{ padding: 0 }}><Logo /></div>
           {children}
           <p className="auth-legal muted small"><Link to="/terms">Terms</Link> · <Link to="/privacy">Privacy</Link></p>
         </div>

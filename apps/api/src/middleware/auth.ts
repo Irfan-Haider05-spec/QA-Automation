@@ -37,6 +37,8 @@ export const auth =
         throw unauthorized("Invalid or expired token");
       }
       if (typeof payload.sub !== "string" || !isUuid(payload.sub)) throw unauthorized("Invalid token");
+      const [account] = await withContext(deps(req).db, {}, (q) => q("select auth_version from users where id = $1", [payload.sub]));
+      if (!account || account.auth_version !== (payload.ver ?? 0)) throw unauthorized("Session has ended. Log in again.");
       req.user = { id: payload.sub };
 
       const orgId = req.params.orgId;

@@ -11,7 +11,7 @@
  *
  * Skipped (not failed) when Maestro isn't installed or no device is connected.
  */
-import { spawnSync } from "node:child_process";
+import { spawnToolSync as spawnSync } from "../core/process.js";
 import fs from "node:fs";
 import path from "node:path";
 import { SkipError, type Finding, type QaPlugin } from "../core/types.js";

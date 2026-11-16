@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { XMLParser, XMLValidator } from 'fast-xml-parser';
 import type { Finding, QaPlugin } from "../core/types.js";
 
 function schemathesisCommand(): string[] | null {
@@ -20,13 +21,23 @@ function schemathesisCommand(): string[] | null {
 const decode = (s: string) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&");
 
 export function parseJunit(xml: string) {
+  if (Buffer.byteLength(xml) > 20 * 1024 * 1024 || /<!DOCTYPE|<!ENTITY/i.test(xml) || XMLValidator.validate(xml) !== true) throw new Error('Invalid or oversized Schemathesis JUnit report');
+  const document = new XMLParser({ ignoreAttributes: false, processEntities: false }).parse(xml);
   const out: Array<{ name: string; message: string; body: string }> = [];
-  for (const m of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)) {
-    const name = decode(m[1].match(/name="([^"]*)"/)?.[1] ?? "unknown");
-    const fail = (m[2] ?? "").match(/<(failure|error)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/);
-    if (!fail) continue;
-    out.push({ name, message: decode(fail[2].match(/message="([^"]*)"/)?.[1] ?? ""), body: decode(fail[3] ?? "").trim() });
-  }
+  const array = (v: any): any[] => v === undefined ? [] : Array.isArray(v) ? v : [v];
+  let executed = 0;
+  const visit = (suite: any, depth = 0) => {
+    if (depth > 30) throw new Error('Schemathesis JUnit nesting limit exceeded');
+    for (const test of array(suite.testcase)) {
+      if (test?.skipped !== undefined) continue;
+      executed++;
+      for (const fail of [...array(test?.failure), ...array(test?.error)]) out.push({ name: decode(String(test?.['@_name'] ?? 'unknown')),
+        message: decode(String(fail?.['@_message'] ?? '')), body: decode(String(typeof fail === 'string' ? fail : fail?.['#text'] ?? '')).trim() });
+    }
+    for (const child of array(suite.testsuite)) visit(child, depth + 1);
+  };
+  if (document.testsuites) visit(document.testsuites); else for (const suite of array(document.testsuite)) visit(suite);
+  if (!executed) throw new Error('Schemathesis JUnit contains no executed tests');
   return out;
 }
 
@@ -58,9 +69,11 @@ export const fuzzPlugin: QaPlugin = {
     else args.push("--exclude-method", "DELETE");
     if (token) args.push("--header", `Authorization: Bearer ${token}`);
     ctx.log.debug(`schemathesis ${args.filter((a) => !a.startsWith("Authorization")).join(" ")}`);
-    const res = spawnSync(cmd[0], args, { encoding: "utf8", maxBuffer: 128 * 1024 * 1024, timeout: 18 * 60 * 1000 });
-    if (!fs.existsSync(junit)) throw new Error(`Schemathesis produced no report (exit ${res.status}): ${(res.stderr || res.stdout).slice(-600)}`);
+    const res = spawnSync(cmd[0], args, { encoding: "utf8", env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }, maxBuffer: 128 * 1024 * 1024, timeout: 18 * 60 * 1000 });
+    if (res.error || res.signal || !fs.existsSync(junit)) throw new Error('Schemathesis execution failed or produced no report; subprocess output omitted');
+    if (fs.statSync(junit).size > 20 * 1024 * 1024) throw new Error('Schemathesis JUnit exceeds 20 MiB');
     const failures = parseJunit(fs.readFileSync(junit, "utf8"));
+    if (res.status !== 0 && failures.length === 0) throw new Error('Schemathesis failed but JUnit contains no failures; refusing a false pass');
     const findings: Finding[] = failures.map((f) => {
       const key = f.name.replace(/\{([^}]+)\}/g, ":$1").replace(new RegExp(`^(\\w+)\\s+${ctx.config.backend.apiPrefix.replace(/\//g, "\\/")}`), "$1 ");
       // Schemathesis 4.x writes "- ST101 Server error" in older releases and "- Server error" in newer ones

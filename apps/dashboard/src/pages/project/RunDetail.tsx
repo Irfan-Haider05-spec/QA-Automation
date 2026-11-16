@@ -19,11 +19,15 @@ export function Evidence({ e }: { e: Record<string, any> | null }) {
   return (
     <div style={{ display: "grid", gap: 8 }}>
       <dl className="kv">
+        {e.veriq?.confidence && <><dt>Confidence</dt><dd>{e.veriq.confidence}</dd></>}
+        {Array.isArray(e.veriq?.cwe) && e.veriq.cwe.length > 0 && <><dt>Standards</dt><dd>{e.veriq.cwe.join(", ")}</dd></>}
+        {e.veriq?.flaky && <><dt>Stability</dt><dd>Flaky — excluded from the gate</dd></>}
         {e.status !== undefined && <><dt>Status</dt><dd>{String(e.status)}</dd></>}
         {e.url && <><dt>URL</dt><dd className="mono">{e.url}</dd></>}
         {e.file && <><dt>Source</dt><dd className="mono">{e.file}{e.line ? `:${e.line}` : ""}</dd></>}
         {e.image && <><dt>Screenshot</dt><dd className="muted">In the CI report artifact ({e.image})</dd></>}
       </dl>
+      {e.veriq?.remediation && <p><strong>Suggested action:</strong> {e.veriq.remediation}</p>}
       {e.curl && <pre className="code" tabIndex={0} aria-label="Reproduce with curl">{e.curl}</pre>}
       {e.responseSnippet && <pre className="code" tabIndex={0} aria-label="Response">{e.responseSnippet}</pre>}
       {e.log && <pre className="code" tabIndex={0} aria-label="Log">{e.log}</pre>}
@@ -89,6 +93,8 @@ export function RunDetailPage() {
           </div>
         </div>
         {r.envError && <div className="alert warn"><b>Environment problem:</b> {r.envError}. Live checks were skipped, so this run says nothing about the code.</div>}
+        {r.evidenceStatus === "pending" && <div className="alert warn"><b>Evidence is pending:</b> The runner has not confirmed that evidence files were attached.</div>}
+        {r.evidenceStatus === "failed" && <div className="alert warn"><b>Evidence upload failed:</b> {r.evidenceError ?? "Evidence files could not be attached to this run."}</div>}
         <dl className="kv">
           <dt>Target</dt><dd className="mono">{r.target ?? "static checks only"}</dd>
           <dt>Coverage</dt><dd>{r.fullCoverage ? "All routes" : `${r.routesSelected} of ${r.routesTotal} routes (${r.selectionReason})`}</dd>
@@ -124,6 +130,8 @@ export function RunDetailPage() {
         </div>
       </section>
 
+      {!!r.artifacts?.length && <section className="panel panel-body" aria-label="Evidence files"><h2>Evidence files</h2><p className="muted small">Private downloads. Links expire after five minutes; refresh this run for a new link.</p><ul>{r.artifacts.map((a) => <li key={a.id}>{a.downloadUrl && /^https:\/\//.test(a.downloadUrl) ? <a href={a.downloadUrl} target="_blank" rel="noreferrer">{a.name}</a> : a.name} <span className="muted small">({Math.ceil(a.size / 1024)} KB)</span></li>)}</ul></section>}
+
       <section className="panel" aria-label="Findings">
         <div className="panel-head">
           <h2>Findings <span className="muted" style={{ fontWeight: 400 }}>{r.findings.length}</span></h2>
@@ -133,7 +141,7 @@ export function RunDetailPage() {
           </div>
         </div>
         {!r.findings.length ? (
-          <div className="empty"><h3>No findings</h3><p>Every check that ran passed.</p></div>
+          <div className="empty"><h3>No findings</h3><p>{r.plugins.some((p) => p.status === "errored") ? "Some checks could not finish. Review the errors above." : "Review skipped checks above to understand the coverage of this run."}</p></div>
         ) : (
           <div className="table-wrap">
             <table className="table">

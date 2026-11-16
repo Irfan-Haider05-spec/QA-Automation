@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 import type { Severity, Suite } from "./types.js";
 
 export interface AccountConfig {
+  apiKey?: string;
+  accessToken?: string;
   /** Email or phone used on POST /auth/login */
   identifier?: string;
   password?: string;
@@ -64,6 +66,12 @@ export interface SocketConfig {
 }
 
 export interface QaConfig {
+  /** Local file imports never fetch remote references or execute source code. */
+  discovery?: { format: "openapi" | "postman"; file: string };
+  /** Trusted local modules/packages only; never accepted in hosted profiles. */
+  plugins?: string[];
+  pluginSettings?: Record<string, unknown>;
+  disposable?: boolean;
   project: string;
   backend: {
     /** Path to the backend repo checkout (static plugins + route discovery) */
@@ -91,6 +99,13 @@ export interface QaConfig {
     pathParams: Record<string, string>;
   };
   login: {
+    strategy?: "bearer" | "cookie" | "api-key" | "oauth2" | "custom";
+    /** Trusted local login code; not serialized into hosted profiles. */
+    customScript?: string;
+    otp?: { path: string; codeEnv: string; challengePath: string; challengeField?: string; codeField?: string };
+    headerName?: string;
+    cookieNames?: string[];
+    oauth?: { tokenUrl: string; clientIdEnv: string; clientSecretEnv: string; scope?: string };
     path: string;
     /** Dot path to the access token in the login response */
     tokenPath: string;
@@ -144,7 +159,7 @@ export interface QaConfig {
     severity: Severity;
   };
   /** Business flows (flows): one file per flow in `dir`, relative to the config */
-  flows: { dir: string; timeoutMs: number; stepTimeoutMs: number; maxMs: number; severity: Severity };
+  flows: { dir: string; timeoutMs: number; stepTimeoutMs: number; maxMs: number; severity: Severity; browsers?: Array<"chromium" | "firefox" | "webkit"> };
   /** Lighthouse on dashboard pages (lighthouse) */
   lighthouse: {
     /** Pages per dashboard name, e.g. { admin: ["/", "/merchants"] }. Default: the app's seedRoutes */
@@ -311,6 +326,7 @@ export async function loadConfig(
     load: { ...DEFAULTS.load, ...(user.load ?? {}), thresholds: { ...DEFAULTS.load.thresholds, ...(user.load?.thresholds ?? {}) } },
   } as QaConfig;
   const configDir = path.dirname(abs);
+  if (config.login.customScript) config.login.customScript = path.resolve(configDir, config.login.customScript);
   if (overrides.backendDir) config.backend.dir = overrides.backendDir;
   config.backend.dir = path.resolve(configDir, config.backend.dir);
   if (overrides.baseUrl) config.target.baseUrl = overrides.baseUrl;
@@ -329,7 +345,7 @@ export async function loadConfig(
   const fromPlatform = overrides.platformAccounts ? mergeAccounts(config.accounts, overrides.platformAccounts) : [];
   // Drop accounts whose credentials are not provided (e.g. secrets missing locally)
   for (const [k, a] of Object.entries(config.accounts)) {
-    if (!a.identifier || !a.password) delete config.accounts[k];
+    if (!a.apiKey && !a.accessToken && !["oauth2", "custom"].includes(config.login.strategy ?? "bearer") && (!a.identifier || !a.password)) delete config.accounts[k];
   }
   return { config, configDir, fromPlatform };
 }

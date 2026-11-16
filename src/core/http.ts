@@ -11,6 +11,9 @@ export interface HttpRequest {
   json?: unknown;
   /** Label used in curl evidence instead of the real token, e.g. "merchantB" */
   tokenLabel?: string;
+  /** Active probes must see the original status (not hide 429s). */
+  retry?: boolean;
+  body?: BodyInit;
 }
 
 export interface HttpResponse {
@@ -21,6 +24,25 @@ export interface HttpResponse {
   ms: number;
   url: string;
   networkError?: string;
+}
+
+/** Enforce the limit while streaming, including responses without Content-Length. */
+export async function readBoundedResponse(res: Response, limit = 5 * 1024 * 1024): Promise<string> {
+  const reader = res.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  if (reader) {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > limit) { await reader.cancel(); throw new Error(`Response exceeds ${limit} byte limit`); }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export class HttpClient {
@@ -44,7 +66,12 @@ export class HttpClient {
   }
 
   url(p: string) {
-    return /^https?:\/\//.test(p) ? p : this.baseUrl + p;
+    const base = new URL(this.baseUrl);
+    const url = new URL(/^https?:\/\//i.test(p) ? p : this.baseUrl + p);
+    if (url.origin !== base.origin || url.username || url.password || !["http:", "https:"].includes(url.protocol)) {
+      throw new Error("API requests must stay on the configured origin and cannot contain URL credentials");
+    }
+    return url.href;
   }
 
   async send(req: HttpRequest, attempt = 0): Promise<HttpResponse> {
@@ -52,7 +79,7 @@ export class HttpClient {
     this.requestCount++;
     const url = this.url(req.path);
     const headers: Record<string, string> = { accept: "application/json", ...(req.headers ?? {}) };
-    let body: string | undefined;
+    let body: BodyInit | undefined = req.body;
     if (req.json !== undefined) {
       headers["content-type"] = "application/json";
       body = JSON.stringify(req.json);
@@ -62,9 +89,10 @@ export class HttpClient {
     const timer = setTimeout(() => ac.abort(), this.timeoutMs);
     try {
       const res = await fetch(url, { method: req.method, headers, body, signal: ac.signal, redirect: "manual" });
-      const text = await res.text();
+      const text = await readBoundedResponse(res);
       const ms = Date.now() - started;
-      if (res.status === 429 && attempt < 3) {
+      const canRetry = req.retry !== false && /^(GET|HEAD|OPTIONS)$/i.test(req.method);
+      if (canRetry && res.status === 429 && attempt < 3) {
         const retryAfter = Number(res.headers.get("retry-after")) || 15;
         await new Promise((r) => setTimeout(r, Math.min(retryAfter, 60) * 1000));
         return this.send(req, attempt + 1);
@@ -73,7 +101,7 @@ export class HttpClient {
       try { json = text ? JSON.parse(text) : undefined; } catch { /* not JSON */ }
       return { status: res.status, headers: res.headers, text, json, ms, url };
     } catch (e: any) {
-      if (attempt < 2) {
+      if (req.retry !== false && /^(GET|HEAD|OPTIONS)$/i.test(req.method) && attempt < 2) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
         return this.send(req, attempt + 1);
       }
@@ -89,10 +117,10 @@ export class HttpClient {
     for (const [k, v] of Object.entries(req.headers ?? {})) {
       const shown = k.toLowerCase() === "authorization" && v.startsWith("Bearer ")
         ? `Bearer $QA_TOKEN_${(req.tokenLabel ?? "X").toUpperCase()}`
-        : v;
+        : /authorization|cookie|key|token|secret/i.test(k) ? "[REDACTED]" : v;
       parts.push(`-H '${k}: ${shown}'`);
     }
-    if (req.json !== undefined) parts.push(`-H 'content-type: application/json' -d '${JSON.stringify(req.json)}'`);
+    if (req.json !== undefined) parts.push(`-H 'content-type: application/json' -d '${JSON.stringify(req.json, (k, v) => /password|secret|token|credential/i.test(k) ? "[REDACTED]" : v)}'`);
     return parts.join(" ");
   }
 }

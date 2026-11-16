@@ -4,6 +4,7 @@ import { useAuth } from "./auth/AuthProvider";
 import { Loading } from "./components/ui";
 import { AppShell } from "./layout/AppShell";
 import { LoginPage } from "./pages/auth/Login";
+import { SsoCallbackPage } from "./pages/auth/SsoCallback";
 import { SignupPage } from "./pages/auth/Signup";
 import { AcceptInvitePage } from "./pages/auth/AcceptInvite";
 import { ForgotPasswordPage } from "./pages/auth/ForgotPassword";
@@ -13,6 +14,7 @@ import { OverviewPage } from "./pages/Overview";
 import { ProjectsPage } from "./pages/Projects";
 import { ProjectLayout } from "./pages/project/ProjectLayout";
 import { RunsTab } from "./pages/project/RunsTab";
+import { TrendsTab } from "./pages/project/Trends";
 import { RunDetailPage } from "./pages/project/RunDetail";
 import { IssuesTab } from "./pages/project/IssuesTab";
 import { EnvironmentsTab } from "./pages/project/EnvironmentsTab";
@@ -51,6 +53,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/sso/callback" element={<SsoCallbackPage />} />
       <Route path="/signup" element={<SignupPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
@@ -66,6 +69,7 @@ export function App() {
         <Route path="projects/:projectId" element={<ProjectLayout />}>
           <Route index element={<Navigate to="runs" replace />} />
           <Route path="runs" element={<RunsTab />} />
+          <Route path="trends" element={<TrendsTab />} />
           <Route path="runs/:runId" element={<RunDetailPage />} />
           <Route path="issues" element={<IssuesTab />} />
           <Route path="issues/:issueId" element={<IssuesTab />} />
