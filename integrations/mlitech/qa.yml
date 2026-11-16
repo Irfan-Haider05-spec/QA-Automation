@@ -122,7 +122,7 @@ jobs:
       - name: Seed QA accounts into the throwaway database
         working-directory: .qa-agent
         run: |
-          npm ci --omit=dev --workspaces=false --no-audit --no-fund
+          npm ci --omit=dev --no-audit --no-fund -w @qa/shared --include-workspace-root
           node --import tsx seed/seed-ci.ts --uri "$DATABASE_URL"
 
       # Two instances sharing MongoDB and Redis, like the PM2 cluster in production:

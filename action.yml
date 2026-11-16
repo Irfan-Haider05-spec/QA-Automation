@@ -97,7 +97,8 @@ runs:
     - name: Install QA agent
       shell: bash
       working-directory: ${{ github.action_path }}
-      run: npm ci --omit=dev --workspaces=false --no-audit --no-fund
+      # The engine imports @qa/shared (packages/shared); install only that workspace with the root.
+      run: npm ci --omit=dev --no-audit --no-fund -w @qa/shared --include-workspace-root
 
     - name: Install Chromium
       if: inputs.install-browser == 'true'
