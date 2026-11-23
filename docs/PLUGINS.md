@@ -1,11 +1,11 @@
 # VeriQ checks and configuration
 
-There are 45 registered checks: 18 existing plugins and 27 additions. Registration
+There are 53 registered checks: 18 existing plugins and 35 additions. Registration
 does not mean all checks ran. A missing prerequisite is **skipped**, invalid input or
 a failed tool is **errored**, and an errored selected check fails the CLI gate.
 Review the coverage table in every report before drawing conclusions.
 
-The root nightly suite includes all 45. Active checks require explicit settings;
+The root nightly suite includes all 53. Active checks require explicit settings;
 they are not guessed from a production application's route names.
 
 ## Start on a real project
@@ -77,9 +77,18 @@ to GET. Paths are same-origin absolute paths. Active tests require **both**
 | password-policy | `cases: [{method?, path, account?, body, minLength?, checks?, commonPasswords?, acceptedStatuses?, rejectionStatuses?}]` | Active, disposable. Creates a distinct user per submission: strong-password positive control, then short/common/identifier passwords must be refused and (optionally) a 64-character passphrase accepted. Reports the configured candidates only, not general password strength. |
 | data-exposure | No settings | GET responses with known params/accounts; flags secret fields, not arbitrary emails/phones without a data-ownership contract. Values omitted. |
 | validation-coverage | No settings | Static route/schema evidence; handler validation may require review. Declared schemas are not proof of runtime enforcement. |
-| sast | `report`, optional `run: true, rules, target, baseline` | Semgrep SARIF 2.1.0. Local rules required for execution. Baseline and changed-file filtering supported. |
+| sast | `report`, optional `run: true, rules, target, baseline` | Semgrep SARIF 2.1.0. Local rules required for execution. Baseline and changed-file filtering supported; absolute paths, `file://` URIs and relative paths are all matched against changed files and shown relative to the backend. Each match (rule, file, position) is its own finding. |
 | api-contract | `baseline, current` OpenAPI files | Removed operations/media/responses/properties, required inputs, request type/enum/bounds restrictions, response type/enum/required guarantees. Operation parameters override path parameters. Bounded comparison subset; not a complete semantic compatibility engine. |
 | test-results | `junit, coverage?, minLinePercent?, baselineLinePercent?, maxDrop?, execution?` | Imports JUnit/Istanbul or runs explicitly configured trusted local tests with fresh report paths. Retry markers remain visible as flaky. See CORE-COMPLETION.md. |
+| diff-coverage | `lcov, base?, head?, repoDir?, minPercent?, include?, exclude?, defaultExcludes?, extensions?, missingFiles?` | Coverage of the executable lines a change adds or modifies, from the project's LCOV report and `git diff base...HEAD`. Changed files absent from the report are reported. Does not measure branch coverage or test quality. |
+| code-quality | `typescript?: {tsconfig? \| output?}, eslint?: {paths \| report}, dart?: {dir? \| output?}, failOn?, baseline?, includeWarnings?, repoDir?, timeoutMs?` | The project's own `tsc --noEmit`, ESLint and `dart analyze`, run or imported; fails on diagnostics that are new compared with a committed baseline (`qa run --only code-quality --baseline`). Does not judge code style beyond the project's own rules. |
+| flaky-tests | `junit (path, glob or list), record?, store?, maxRuns?, window?, minRuns?, minFlips?, maxFlakyTests?, repoDir?` | Records each JUnit run in a bounded local history keyed by the tested commit and reports tests that failed and passed on the same clean commit, passed only after a retry, or keep changing result. Findings are medium; `maxFlakyTests` adds a blocking limit. Does not rerun tests itself. |
+| mongo-indexes | `static?, knownIndexes?, ignoreModels?, live?: {uriEnv, database?, maxCollections?, profiler?, minDocsExamined?, unusedAfterDays?, timeoutMs?}` | Static: Mongoose models, declared indexes and code queries; a query whose filter fields start no index is reported, plus duplicate and redundant indexes. Live (read-only): real indexes, `explain` of the same shapes, unused indexes from `$indexStats`, and full scans already in the profiler. Dynamic filters are counted, not guessed. Each query shape or index is its own finding (target `User { fcmToken }`). An index MongoDB refuses to build (an unsupported operator such as `$ne` in `partialFilterExpression`) is reported statically; live mode also reports declared indexes missing from the database. |
+| log-hygiene | `source?, logs?, pii?, ignoreEmailDomains?, canary?: {method, path, json, logs, settleMs?}` | Logging calls that write request bodies, headers or password/token values; log files scanned for passwords, tokens, keys, cards and personal data (values never shown); in a disposable environment a canary value sent to the API is searched for in new log lines. |
+| api-scenarios | `files (path, glob or list), tags?, excludeTags?, snapshotDir?` | Multi-step functional API tests written in YAML/JSON: chained requests as QA accounts or anonymous, status/time/header/JSON/JSON Schema/snapshot assertions, saved variables, cleanup that always runs, tags for smoke/regression/UAT, JSON and JUnit reports. Writing scenarios need `allowMutations` and `disposable`. |
+| scenario-lint | uses the `api-scenarios` settings | Static (no target): each scenario step against the discovered routes. Reports paths or methods the backend does not have, unknown accounts, `{{variables}}` used before anything defines them, success expected from a route the account may not call (no account, or a role the route does not allow), and bodies missing fields the route's zod validation requires. Expectations of refusal are never questioned. |
+| db-checks | `database: {type, urlEnv?, database?}, files, tags?, excludeTags?, timeoutMs?` | Read-only data-integrity rules on MongoDB, PostgreSQL or MySQL/MariaDB (orphans, duplicates, impossible values) with expected counts; reports a count and a few redacted sample ids, never row contents. |
+| injection-probes | `cases: [{name, method, path, account?, query?/json? with {{probe}}, kinds?, success? or resultPath?, control?, timeBased?}]` | NoSQL operator and SQL injection (boolean, error, optional time delay) on listed inputs, each judged against a control request and repeated; disposable environments only; no stacked or data-changing statements. |
 | uptime | `requests: [request], maxMs?, history?, store?` | GET samples; optional bounded local observation history with coverage, gaps, outage episodes and an availability target evaluated only over observed time. Not a monitoring daemon: observations exist only when runs are scheduled. |
 | tls-dns-mail | `host, port?, warnDays?, mailDomain?, dkimSelectors?, domainExpiresAt?` | TLS trust/expiry and DNS policy. No legacy-cipher enumeration; registration expiry is supplied, not a WHOIS guess. |
 | race-conditions | `request, concurrency (2–10), verify, valuePath, expectedValue` | Active; verifies an application state invariant. Throttling is retained; timing stats do not prove server-side overlap. |
@@ -362,6 +371,33 @@ incomplete evidence upload explicitly. Hosted-run evidence upload is not yet wir
 removing metadata. Run deletion retains cleanup tombstones. Configure a bucket
 lifecycle rule as disaster-recovery protection for a platform/database outage.
 This is evidence retention, not yet per-plan billing or PostgreSQL run retention.
+
+## Fingerprints, merged findings and uploads
+
+A finding's fingerprint is its plugin, title and target with volatile numbers and ids
+removed. A plugin adds an exact `key` when one target can have several different problems
+under one title: `sast`/`container-iac` (rule, file and position), `api-contract` (title and
+detail), `test-results` and `flaky-tests` (exact test name) and `mongo-indexes` (model and
+shape or index). Findings without a key keep their earlier fingerprints. After upgrading
+from a version before 19 November 2026, rerun `qa run --baseline` for these five plugins;
+on the platform their old issues close and new ones open once.
+
+Exact repeats are removed. Different findings that still share a fingerprint are merged:
+the first one lists the others in its detail, takes the worst severity and stays blocking
+if any of them is. Uploads shorten text above the platform's limits (title and target 500,
+detail and remediation 5 000, reason 2 000 characters) with a marker; `report.json` keeps the
+full text.
+
+## CORS bypass probes (`health-cors`)
+
+Besides one unrelated origin, `health-cors` sends preflights from origins derived from each
+`cors.allowedOrigins` entry: `<origin>.qa-evil-origin.example` (accepted by a `startsWith` or
+unanchored-pattern check), `qa-evil<host>` (accepted by `endsWith`/`includes`), the `http://`
+version of an `https://` origin, and `null`. A reflected origin is high with
+`Access-Control-Allow-Credentials: true`, otherwise medium; the plain-HTTP version is low.
+Probes are skipped where no attacker could own the origin (a port inside the host name, an
+IP address, a single-label host such as `localhost`) and for origins listed on purpose.
+These are `OPTIONS` requests only. If the API reflects every origin, only that is reported.
 
 ## Before accepting a real-project run
 
@@ -747,3 +783,558 @@ Limitations: this tests the configured endpoint and candidates only. It does not
 check breached-password APIs, password change/reset routes, login lockout (see
 `rate-limit`), hashing or storage, client-side rules, or policies that differ by
 role. Created QA users remain in the disposable environment.
+
+## Changed-lines (diff) coverage
+
+`diff-coverage` answers: of the executable lines this change adds or modifies, how many
+did the project's own tests run? Total coverage can stay high while new code ships
+untested; this gate looks only at the change, so old untested code does not block it.
+
+```ts
+'diff-coverage': {
+  lcov: 'coverage/lcov.info',        // c8/nyc/Jest/Vitest `lcov` reporter, or `flutter test --coverage`
+  base: 'origin/main',               // compared as base...HEAD (merge base), like a pull request
+  minPercent: 80,
+  exclude: ['src/generated/**'],     // added to the default excludes
+},
+```
+
+How it counts:
+
+- Changed lines come from `git diff --unified=0 --find-renames base...HEAD` (added,
+  modified and renamed files). Deleted lines are not counted.
+- Only lines the LCOV report marks as executable (`DA` records) count. Comments, blank
+  lines and type-only lines do not.
+- Default excludes: `**/*.test.*`, `**/*.spec.*`, `**/__tests__/**`, `test/**`,
+  `tests/**`, `**/*.d.ts`, `**/*.g.dart`, `**/*.freezed.dart`. `exclude` adds to them;
+  `defaultExcludes: false` turns them off. `include` narrows the scope.
+- Default extensions: `.ts .tsx .js .jsx .mjs .cjs .mts .cts .dart`.
+- A changed source file that the report does not mention at all is a separate finding
+  (high by default, low with `missingFiles: 'report'`), because its lines could not be
+  measured. Configure the coverage tool to include all source files (for example
+  `c8 --all`, Jest `collectCoverageFrom`) or exclude files without runtime code.
+
+It errors, never passes, when the report is missing, empty, malformed, older than the
+head commit, or older than a changed file, when no report path lies inside the
+repository, when a ref cannot be resolved, or when the diff exceeds 32 MiB. The
+per-file result (uncovered changed line ranges) is written to
+`<outDir>/diff-coverage.json`; the finding lists the 20 least-covered files.
+
+In CI the base commit must be present: use `actions/checkout` with `fetch-depth: 0`,
+run the tests with LCOV coverage, then run VeriQ. git runs without a shell and with
+external diff drivers, textconv and fsmonitor disabled, so a repository's own git
+config cannot make the check run programs; refs are validated and passed after
+`--end-of-options`.
+
+Not covered: branch/condition coverage, whether the tests assert anything useful
+(mutation testing), and changes outside the configured extensions.
+
+## Code-quality gate (new problems only)
+
+`code-quality` runs the project's own type checker and linters and fails only on
+problems that the change introduces. Old problems are recorded once in a baseline file
+that is committed with the project, so a codebase with existing errors can adopt the
+gate today and pay the old debt down later.
+
+```ts
+'code-quality': {
+  typescript: {},                            // tsc --noEmit -p tsconfig.json (or { tsconfig: 'tsconfig.app.json' })
+  eslint: { paths: ['src'] },                // eslint --format json src
+  // dart: {},                               // dart analyze --format=machine (Linux/macOS)
+  // failOn: 'new',                          // default; 'any' fails on every error and needs no baseline
+  // baseline: '.veriq/code-quality-baseline.json',
+  // includeWarnings: false,                 // warnings (ESLint severity 1, Dart WARNING) count only when true
+},
+```
+
+First use, once per project (review the result and commit the file):
+
+```bash
+npx qa run --only code-quality --baseline
+git add .veriq/code-quality-baseline.json
+```
+
+After that every run compares against it. Fixing an old problem is reported as
+`fixedSinceBaseline`; refreshing the baseline after a cleanup shrinks it. Accepting a
+new problem on purpose is the same command, which makes the decision visible in review.
+
+How it compares:
+
+- A diagnostic is identified by tool, file, rule code and message, not by line number,
+  so code that only moves does not turn old problems into new ones.
+- Identities are counted: a second copy of an already accepted message in the same file
+  is new.
+- The baseline stores hashes and counts only, not source text or messages.
+
+Running tools:
+
+- `tsc` and `eslint` are taken from the project's own `node_modules` (or a parent folder,
+  for npm/yarn/pnpm workspaces), so the project's pinned versions and configuration are
+  used. A machine-wide or `NODE_PATH` copy is never used. If the package is missing the
+  check errors with "not installed in the project".
+- Tools run without a shell, with a time limit (`timeoutMs`, default 10 minutes) and a
+  64 MiB output limit.
+- ESLint loads the project's own eslint config, which is code from the repository.
+  Configuring `eslint.paths` is consent to run it; for an untrusted branch import a
+  report instead.
+- `dart analyze` runs from PATH on Linux and macOS. On Windows Node cannot start
+  `dart.bat` without a shell, so save the output and import it.
+
+Importing saved output (for example from an earlier CI step, or Flutter on Windows):
+
+```ts
+'code-quality': {
+  typescript: { output: 'reports/tsc.txt' },      // tsc --noEmit --pretty false > reports/tsc.txt
+  eslint: { report: 'reports/eslint.json' },      // eslint -f json -o reports/eslint.json src
+  dart: { output: 'reports/dart.txt' },           // dart analyze --format=machine > reports/dart.txt 2>&1
+},
+```
+
+A saved report older than the latest commit is rejected as stale.
+
+It errors, never passes, when: there is no baseline and `failOn` is `new`; the
+baseline is invalid; `tsc` reports a project-level problem (for example a wrong
+`tsconfig`, `TS5058`, `TS18003`); ESLint exits with code 2 (configuration error or
+crash) or prints something that is not JSON; Dart output is not in machine format; a
+tool is missing, times out or exceeds the output limit.
+
+Output: one finding per tool, listing up to 30 new problems as `file:line rule message`
+(errors are high, warnings medium), and `<outDir>/code-quality.json` with up to 2000 new
+diagnostics.
+
+Not covered: formatting (Prettier), complexity metrics, and tools other than tsc,
+ESLint and the Dart analyzer.
+
+## Flaky-test detection
+
+`flaky-tests` finds tests that fail without the code changing. It reads the project's own
+JUnit report after each test run, adds it to a local history, and looks at the most
+recent runs.
+
+```ts
+'flaky-tests': {
+  junit: 'reports/junit.xml',          // or a glob for shards: 'reports/**/junit*.xml', or a list
+  // store: '.veriq/test-history.json', // relative .json path; must persist between runs
+  // window: 30,                       // newest runs analysed
+  // minRuns: 5,                       // runs needed before result changes are judged
+  // minFlips: 3,                      // pass/fail changes that make a test "suspected"
+  // maxFlakyTests: 0,                 // optional: more flaky tests than this is a high (blocking) finding
+  // maxRuns: 200,                     // runs kept in the history
+},
+```
+
+What is reported (one finding per test, up to 50; the rest in `flaky-tests.json`):
+
+| Finding | Evidence | Confidence |
+|---|---|---|
+| Flaky test: failed and passed on the same commit | Both results recorded for one clean commit (for example after "re-run failed jobs") | high |
+| Flaky test: passed only after a retry | The report says so: `flakyFailure`, `flakyError`, `rerunFailure`, `rerunError` (Surefire, Gradle and compatible reporters) | high |
+| Suspected flaky test: result keeps changing | `minFlips` or more pass/fail changes within the window, across different commits | medium |
+
+Not reported: a test that always fails (that is `test-results`), and a test that broke
+and was then fixed (two changes, below the default `minFlips` of 3).
+
+How runs are identified:
+
+- The tested commit is git `HEAD` in `repoDir`. If tracked files have uncommitted
+  changes the run is marked dirty and never counts as "the same commit". Untracked files
+  (report and history folders) are ignored for this.
+- Without git, runs are still recorded and result changes are still judged, but no two
+  runs count as the same commit.
+- A report older than the latest commit is rejected, so old results are never recorded
+  under new code.
+- The same report is recorded once (content hash). Running VeriQ twice without rerunning
+  the tests does not add a run.
+- Several test cases with the same name in one run are combined. If some passed and some
+  failed (common with parameterised tests that share a title), that run counts as
+  "mixed"; a test that is mixed in every run is not flaky, but one that moves between
+  mixed and passing is. `duplicateNames` in the stats shows how many names are shared.
+- Skipped cases do not count as runs of that test.
+
+Until the window has `minRuns` runs, the check is reported as skipped with the progress
+("3 of the 5 runs"), not as passed, unless a confirmed flaky test was already found.
+`record: false` analyses the history without adding a run (for example a nightly report).
+
+The history stores test names (`classname name`), outcome codes, commit, time and a
+report hash. Failure messages, stack traces and captured output are never read into it.
+It is replaced atomically under a lock, keeps the newest `maxRuns` runs, drops tests no
+kept run mentions, and is limited to 64 MiB. A damaged, linked or future-dated history
+errors and is left untouched for a person to inspect.
+
+In CI the history must survive between runs: keep it on a self-hosted runner, or restore
+and save it with a cache step (for example `actions/cache` with a key per branch). Run
+the tests with a JUnit reporter first, for example `node --test
+--test-reporter=junit --test-reporter-destination=reports/junit.xml 'test/**/*.test.*'`,
+`jest --reporters=default --reporters=jest-junit`, `vitest --reporter=junit`,
+`flutter test --machine | tojunit`. The report folder must exist before the run.
+
+Not covered: rerunning failing tests to confirm flakiness, timing-based flakiness without
+a failure, and quarantine management.
+
+## MongoDB indexes and queries
+
+`mongo-indexes` finds queries that will read whole collections as data grows.
+
+```ts
+'mongo-indexes': {
+  // static: true,                                   // read the backend's Mongoose code (default)
+  knownIndexes: [{ model: 'Promotion', keys: ['merchantId', 'createdAt:-1'] }], // indexes created outside Mongoose
+  // ignoreModels: ['AuditLog'],
+  // live: { uriEnv: 'QA_MONGO_URI' },                // optional, read-only; see below
+},
+```
+
+Static analysis (no database):
+
+- Models: `model('Name', schema)` / `mongoose.model(...)` (also `mongoose.models.X || model(...)`
+  and `export default`), with the collection name Mongoose would use (its own plural
+  rules, or the `collection` option / third argument).
+- Declared indexes: field options `index`, `unique`, `sparse`, `expires`, `text`,
+  `index: { ... }`, nested paths (`address.city`), arrays of a field definition, and
+  `schema.index({...}, options)`. Indexes of a sub-schema variable are not followed.
+- Queries: `find`, `findOne`, `findOneAnd*`, `update*`, `delete*`, `replaceOne`,
+  `countDocuments`, `exists`, `distinct(field, filter)`, the first `$match` of
+  `aggregate([...])`, and a chained `.sort({...})`, through local and imported
+  (including renamed) model bindings. `$and` merges fields; each `$or` branch must be
+  indexed on its own.
+- A filter the code builds at runtime (a variable, a spread, a computed key) is counted
+  in `dynamicQueries`, not guessed. Empty filters and `$text` queries are counted too.
+- A query is reported when no index (or `_id`) starts with one of its filter fields; for a
+  sort-only query, when no index starts with the sort field. Text indexes do not count
+  for equality filters. Partial indexes are assumed usable (a possible miss, never a
+  false report).
+- Also reported (low): an index declared twice (Mongoose warns and builds one) and a
+  plain index that is a prefix of a wider one. Unique, sparse and partial indexes are
+  never called redundant.
+
+Findings are medium, confidence medium, one per model and filter shape with up to 10
+`file:line` locations and a suggested `schema.index(...)`.
+
+Live checks (optional). Give a **read-only** connection string in an environment
+variable (never in the config file). VeriQ only lists collections and indexes, runs
+`$indexStats`, `explain("queryPlanner")` on the statically found query shapes with
+placeholder values, and reads `system.profile` if the profiler is already on. It never
+writes, never enables the profiler, and reduces profiler filters to field names.
+
+```ts
+live: {
+  uriEnv: 'QA_MONGO_URI',      // e.g. a user with the read role (+ clusterMonitor for $indexStats)
+  // database: 'mlitech',      // default: the database in the connection string
+  // profiler: true, minDocsExamined: 1000, unusedAfterDays: 7, maxCollections: 200, timeoutMs: 15000,
+}
+```
+
+With live checks, a found collection's real indexes replace the declared ones and the
+plan decides: "Query plan scans the whole collection" (confidence high). Also reported:
+indexes with no recorded use for at least `unusedAfterDays` (low; `_id`, unique and TTL
+indexes excluded; counters reset on restart), redundant real indexes, and "Full
+collection scans recorded by the profiler" grouped by collection, operation and filter
+fields. Connection errors never include the connection string.
+
+Indexes that never exist. Mongoose only logs a failed index build and carries on, so a
+declared index can be missing while every query and unique rule relies on it:
+
+- "Index can never be built" (static, no database needed): `partialFilterExpression`
+  uses an operator MongoDB refuses there (`$ne`, `$nin`, `$not`, `$nor`, `$regex`, `$expr`,
+  `$where`, `$elemMatch`, `$size`, `$all`, `$mod`, `$text`, or `$exists: false`). High when
+  the index is unique (duplicates are then not prevented), otherwise medium. Such an
+  index serves no query in the analysis. For "present and not null" use
+  `{ field: { $type: "string" } }` or `$exists: true`.
+- "Declared index is missing from the database" (live): a declared index is not among the
+  collection's real indexes (a failed build, duplicate values under a unique key, or
+  `autoIndex` off). High when unique.
+
+Not covered: index selectivity and cardinality, covered-query and sort-direction tuning,
+write cost of indexes, and queries built by helpers such as a generic QueryBuilder (they
+appear as dynamic).
+
+## Log hygiene
+
+`log-hygiene` checks that credentials and personal data do not reach logs (CWE-532).
+
+```ts
+'log-hygiene': {
+  // source: true,                                  // scan logging calls in the backend (default)
+  logs: 'logs/*.log',                               // optional: real log output to scan
+  // pii: { emails: true, phones: true, idNumbers: true, cards: true },
+  // ignoreEmailDomains: ['mlitech.pk'],           // .test/.invalid/.example/.localhost and example.* are always ignored
+  // canary: { path: '/api/v1/auth/login', json: { email: 'veriq-canary@example.invalid', password: '{{canary}}' }, logs: 'logs/app.log' },
+},
+```
+
+Source (high, confidence medium): calls to `console.*`, and to `log`, `logger`, `*Logger`
+(for example `errorLogger`), `winston`, `pino` or `bunyan` objects, whose arguments
+contain `req.body`, `req.headers`/`req.cookies`, the whole `req`, or a value named like a
+password or token (`password`, `token`, `accessToken`, `refreshToken`, `otp`,
+`authorization`, `cookie`, `apiKey`, …), followed through templates, `+`, objects and
+`JSON.stringify`. Object keys set to a literal (`{ password: '***' }`) and transformed
+values (`mask(token)`, `token.length`) are not reported. `morgan` formats with
+`:req[authorization]` or `:req[cookie]` are reported.
+
+Log output: each line is checked for password fields (`"password":"…"`, escaped JSON,
+`password=…`, `password: '…'`), token/secret fields (including numeric OTPs),
+`Authorization`/cookie headers, JWTs, private keys, AWS/Stripe/Google keys, database URLs
+with passwords (critical), card numbers with a card prefix and a valid Luhn check (high),
+and emails, phone numbers and national ID numbers (medium). Masked values (`***`,
+`[REDACTED]`, `null`, placeholders) are not hits, and a message like "invalid password:
+user not found" is not a value. Findings list `file:line` and the value length only.
+Up to 50 MiB per file and 200 MiB in total. To scan container logs, save them first,
+for example `docker compose logs api > logs/api.log`.
+
+Canary (critical when found): only with `allowMutations` and `disposable`. A unique value
+replaces `{{canary}}` in the request JSON, the request is sent once, and only the log
+lines written afterwards are searched (a rotated, shorter file is read from the start).
+If no new log line appears within `settleMs`, the check errors: silence would prove
+nothing. The canary value itself is not reported.
+
+Not covered: logs held only in a hosted service (export them to a file), log retention
+and access control, and data logged by third-party agents.
+
+## API scenarios (functional, regression, smoke and UAT API tests)
+
+`api-scenarios` runs business-level API tests that you write as data. Each scenario is a
+list of steps; each step sends one request and checks the answer. Values from one step
+(an id, a token, a title) can be used by later steps, so a scenario can create, read,
+update and delete a record and check every answer on the way.
+
+```ts
+'api-scenarios': { files: 'qa-scenarios/*.yaml' },     // also tags: ['smoke'], excludeTags: ['slow']
+```
+
+A starter file is in `examples/api-scenarios.yaml`. The shape:
+
+```yaml
+version: 1
+scenarios:
+  - name: Merchant creates a promotion and reads it back   # unique; names results and snapshots
+    tags: [regression, uat]                                # select with tags / QA_SCENARIO_TAGS
+    account: merchantA                                     # default QA account (from config)
+    severity: high                                         # of the finding when it fails
+    vars: { title: "QA promo {{unique}}" }
+    steps:
+      - name: create
+        request: { method: POST, path: /api/v1/promotion, json: { title: "{{title}}", discount: 15 } }
+        expect:
+          status: 201                      # or a list: [200, 201]; without status, any 2xx
+          maxMs: 2000
+          headers: { content-type: { contains: application/json } }
+          json:
+            - { path: $.data.title, equals: "{{title}}" }
+            - { path: $.data.discount, gte: 1, lte: 100 }
+          schema: { type: object, required: [data] }
+        save: { promoId: $.data._id }      # or { header: location }
+      - name: read back
+        account: merchantB                 # another account; null = anonymous
+        request: { method: GET, path: "/api/v1/promotion/{{promoId}}" }
+        expect: { status: [403, 404] }
+    cleanup:                               # always runs, even after a failure
+      - account: merchantA
+        request: { method: DELETE, path: "/api/v1/promotion/{{promoId}}" }
+        expect: { status: [200, 204, 404] }
+```
+
+Requests: `method` (GET, HEAD, POST, PUT, PATCH, DELETE), `path` on the target, `query`,
+`headers`, `json`, and per-step `account` (`null` for anonymous) and `delayMs`. A
+variable inserted into `path` is URL-encoded, so a value cannot add path segments.
+
+JSON assertions take a `path` (`$.a.b`, `$.items[0]`, `$.items[-1]`, `$.items.length`,
+`$["odd key"]`) and one or more of: `exists`, `equals`, `notEquals`, `contains` (text,
+array item or partial object), `notContains`, `matches` (regular expression), `type`
+(string, number, integer, boolean, object, array, null), `gt`/`gte`/`lt`/`lte`, `length`,
+`minLength`/`maxLength`, `oneOf`, `every` (each array item must pass) and `some` (at
+least one must). Inside `{ }` or `[ ]`, quote paths that contain `[ ]`.
+
+`schema` is a JSON Schema subset: `type`, `enum`, `const`, `required`, `properties`,
+`additionalProperties`, `items`, `minItems`/`maxItems`, `uniqueItems`, number and length
+limits, `pattern`, `format` (date-time, date, email, uuid, objectid, uri), `anyOf`,
+`oneOf`, `allOf`, `not`. Any other keyword (for example `$ref`) is a configuration error,
+so a schema never passes because a keyword was ignored.
+
+`text` checks non-JSON bodies (`contains`, `notContains`, `matches`).
+
+Variables: `vars` of the scenario, values saved by earlier steps, `{{unique}}` (new for
+every scenario and run, for unique titles and emails), `{{uniqueDigits}}` (ten digits,
+for unique phone numbers and other numeric fields), `{{now}}`, `{{today}}`, and
+`{{env.QA_*}}` (only environment variables starting with `QA_`). A value that is exactly
+one template keeps its type (`discount: "{{discount}}"` stays a number). An unknown
+variable fails the step with its name.
+
+Snapshots (API response regression): add `snapshot: { ignore: [$.data._id, "$.items[*].updatedAt"] }`
+(or `mode: shape` to compare only types). Approve responses with
+`npx qa run --only api-scenarios --baseline` and commit `.veriq/api-snapshots/`. Later
+runs report every changed path. Keys named like passwords or tokens are stored as
+`[redacted]`. Until a snapshot is recorded, "API snapshots not recorded yet" (high) is
+reported instead of a pass. A step that already failed gets no snapshot finding.
+
+Safety and results:
+
+- A scenario with any POST/PUT/PATCH/DELETE runs only with `allowMutations` and
+  `disposable`; otherwise it is reported as skipped (and the check is skipped if
+  nothing else could run).
+- After a failed step, later steps are not sent; cleanup still runs, and a cleanup step
+  whose variables were never saved is skipped. A failed cleanup is a medium finding.
+- One finding per failed scenario (title "API scenario failed: name", the scenario's
+  severity), naming the step, request, account and every failed assertion, with a curl
+  command (tokens replaced by `$QA_TOKEN_<ACCOUNT>`) and a response excerpt.
+  Secret-looking values are shown as `[redacted]`.
+- `api-scenarios.json` (every step: status, time, errors) and
+  `api-scenarios.junit.xml` (one test case per scenario) in the output folder. The
+  JUnit file can feed `test-results` and `flaky-tests`.
+- Problems in a scenario file (YAML errors with line numbers, unknown fields, duplicate
+  names, assertions without an operator, unsupported schema keywords, invalid regular
+  expressions) stop the check with the file name; they are never skipped.
+
+Smoke after a deploy: tag read-only scenarios `smoke` and run
+`QA_SCENARIO_TAGS=smoke npx qa run --only api-scenarios`.
+
+Postman: a Postman v2.1 collection can already supply routes to discovery
+(`discovery: { format: "postman", file: "collection.json" }` in the config), and Postman tests can be run with Newman
+(`newman run collection.json -r junit --reporter-junit-export newman.xml`) and read by
+`test-results` and `flaky-tests` (`junit: "newman.xml"`). Newman names assertions the same in
+every request ("Status code is 200"); when one name appears in more than one suite, the
+request (suite) name is put in front (`Create promotion › Status code is 200`), so each
+request is its own test and a pass in one request and a failure in another is not taken
+for a flaky test. Names that are unique, and repeats inside one suite (some reporters
+list reruns that way), are unchanged. Scenarios are VeriQ's own format; they are not
+converted from Postman scripts.
+
+Checking scenario files without a target: `scenario-lint` (add it to the pull-request
+suite) compares every step with the backend's discovered routes and reports a path or
+method that does not exist, an unknown account, a variable used before a step saves it,
+success expected from a route the step's account may not call, and a body missing fields
+the route's zod validation requires. A template matches any value (`/promotion/{{id}}`
+matches `/promotion/:id`; a literal route such as `/promotion/search` is preferred only
+for literal text). Paths may be the full mounted path or relative to the API prefix.
+Extra body fields are not reported (zod objects strip unknown keys unless strict).
+
+UAT evidence: each scenario's outcome is uploaded with the run (name, result, tags,
+time). In the dashboard, an acceptance criterion linked to a scenario shows the latest
+uploaded result with a link to its run, and "Use this run as evidence" attaches that run.
+The criterion form offers the scenario names from recent runs.
+
+Not covered: GraphQL operations (see `graphql`), file uploads and multipart bodies (see
+`file-upload`), WebSocket steps, and running scenarios in parallel.
+
+### Database steps in scenarios
+
+A step can read the database instead of calling the API, to check what an API call
+stored (and to use stored values in later steps). Set the database in the settings:
+
+```ts
+'api-scenarios': { files: 'qa-scenarios/*.yaml', database: { type: 'mongodb', urlEnv: 'QA_DB_URL' } },
+```
+
+```yaml
+      - name: stored in the database
+        db:
+          collection: promotions                                  # MongoDB
+          filter: { _id: { $oid: "{{promoId}}" }, discount: 15 }   # Extended JSON for ObjectId/Date
+          expect: { count: 1 }
+      - name: stored (SQL)
+        db: { sql: "SELECT id, discount FROM promotions WHERE id = $1", params: ["{{promoId}}"], expect: { count: 1, json: [{ path: "$[0].discount", equals: 15 }] } }
+        save: { storedId: "$[0].id" }
+```
+
+Without `expect`, a database step needs at least one row. `expect` takes `count`, `min`,
+`max` and JSON assertions on the rows (`$[0].field`). Values go in `params` (`$1` for
+PostgreSQL, `?` for MySQL) or in the MongoDB filter, never into SQL text. The same
+read-only rules as `db-checks` apply.
+
+## Data-integrity checks (database testing)
+
+`db-checks` runs rules about the data itself: read-only queries with an expected number
+of rows. The default expectation is "no rows", which suits rules such as "no promotion
+belongs to a deleted merchant".
+
+```ts
+'db-checks': { database: { type: 'mongodb', urlEnv: 'QA_DB_URL' }, files: 'qa-db-checks/*.yaml' },
+```
+
+```yaml
+version: 1
+checks:
+  - name: Promotions belong to an existing merchant          # MongoDB aggregate
+    severity: critical
+    collection: promotions
+    pipeline: [ { $lookup: { from: users, localField: merchantId, foreignField: _id, as: m } }, { $match: { m: { $size: 0 } } } ]
+  - name: No negative point balances                          # MongoDB filter
+    collection: wallets
+    filter: { points: { $lt: 0 } }
+  - name: Merchant emails are unique ignoring case             # SQL
+    sql: "SELECT LOWER(email) AS email, COUNT(*) AS n FROM merchants GROUP BY LOWER(email) HAVING COUNT(*) > 1"
+    sampleField: email
+  - name: No expired promotion is still active
+    sql: "SELECT id FROM promotions WHERE active = $1 AND expires_at < $2"
+    params: [true, "2026-11-19"]
+    expect: { max: 0 }                                         # or count, min, json
+```
+
+Databases: MongoDB (the engine's own driver), PostgreSQL (`pg`, or `pglite://` for an
+embedded local database) and MySQL/MariaDB (`mysql2`). The SQL drivers are optional: if
+one is missing the check says which package to install. The connection string comes from
+the environment variable in `urlEnv`; use a read-only database user.
+
+Read-only, in layers:
+- SQL: exactly one `SELECT`/`WITH` statement, no comments, no `INSERT`/`UPDATE`/`DELETE`/
+  `MERGE`/`INTO`/DDL, no row locks. It runs inside a `READ ONLY` transaction that is
+  always rolled back, so the database itself refuses writes, including writes hidden in
+  a function. A server-side time limit applies (`statement_timeout` on PostgreSQL,
+  `max_execution_time`/`max_statement_time` on MySQL/MariaDB); embedded PGlite cannot
+  interrupt a query, so it has no time limit.
+- MongoDB: count, find or aggregate only; `$out`, `$merge` and server-side JavaScript
+  (`$where`, `$function`, `$accumulator`) are refused; `system.*` collections are refused;
+  `maxTimeMS` applies.
+- At most 10 000 rows are read; a larger result is reported as "10000 or more", never as
+  an exact count.
+
+Findings: "Data integrity check failed" (the check's severity) with the count and up to 5
+sample values of `sampleField` (default `_id` or `id`), with personal data redacted; a
+query that cannot run (missing table, permission, timeout) is "Data check could not run"
+(high, configuration). Row contents never reach findings or `db-checks.json`. Check
+files are validated before any query runs, and problems stop the check with the file
+name.
+
+Not covered: schema migrations, write paths (use scenarios with database steps), and
+MongoDB acceptance against a real server in this repository's tests (no server was
+available); the PostgreSQL and MariaDB paths were run against real servers.
+
+## Injection probes (NoSQL and SQL)
+
+`injection-probes` checks whether a listed input can change a database query. It runs
+only with `allowMutations` and `disposable`, because it sends unusual input to real
+endpoints.
+
+```ts
+'injection-probes': {
+  cases: [
+    { name: 'Login', path: '/api/v1/auth/login', json: { email: 'merchant@qa.test', password: '{{probe}}' },
+      success: { status: [200], json: [{ path: '$.data.accessToken', exists: true }] } },
+    { name: 'Promotion search', method: 'GET', path: '/api/v1/promotion/search', account: 'merchantA',
+      query: { q: '{{probe}}' }, resultPath: '$.data', kinds: ['nosql'] },
+  ],
+},
+```
+
+Mark exactly one input as `{{probe}}`, and say what "it worked" looks like: `success`
+(status and JSON assertions, for logins) or `resultPath` (a list whose length is
+compared, for searches).
+
+- NoSQL: the value becomes `{"$ne": null}`, `{"$gt": ""}`, `{"$regex": ".*"}` or
+  `{"$exists": true}` (in a query string: `q[$ne]=`). Reported as "NoSQL operator
+  injection" when the operator gets in and the control does not, both repeated. A server
+  error on operator input is "Operator input causes a server error" (medium): the field is
+  not type-checked, but where the object went is not known from outside.
+- SQL: TRUE/FALSE condition pairs for text and numbers (reported when TRUE changes the
+  result, FALSE does not, and TRUE does so again); quote characters that expose a
+  database syntax error in the response; with `timeBased: true`, a `pg_sleep`/`SLEEP`
+  delay that slows the answer twice. No stacked statements (`;`) and no data-changing
+  SQL are ever sent. SQL Server time-based checks are not included.
+
+Every case starts with a control request using an ordinary value (`control`, default
+random). If the control is already "successful", or (with an account) refused, the case
+is inconclusive and reported in the stats; if every case is inconclusive the check
+errors instead of passing. Findings are critical (the case's `severity`) with CWE-943 or
+CWE-89, both answers summarised, and a curl command with tokens replaced.
+
+Not covered: second-order injection, injection in headers or cookies, and endpoints that
+hide every difference (blind without a time delay).

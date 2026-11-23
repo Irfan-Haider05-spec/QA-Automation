@@ -4,7 +4,7 @@
  */
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { api } from "./client";
-import type { ApiKey, AuditEvent, Channel, Delivery, Deployment, HostedStatus, Job, Report, ReportShare, Schedule, Client, Credential, Environment, Invite, Issue, IssueDetail, Member, Org, OrgSummary, Project, Run, RunDetail, User, Verification } from "./types";
+import type { UatCriterion, UatRelease, UatScenario, ApiKey, AuditEvent, Channel, Delivery, Deployment, HostedStatus, Job, Report, ReportShare, Schedule, Client, Credential, Environment, Invite, Issue, IssueDetail, Member, Org, OrgSummary, Project, Run, RunDetail, User, Verification } from "./types";
 
 export const keys = {
   me: ["me"] as const,
@@ -31,6 +31,9 @@ export const keys = {
   members: (o: string) => ["org", o, "members"] as const,
   invites: (o: string) => ["org", o, "invites"] as const,
   audit: (o: string) => ["org", o, "audit"] as const,
+  uat: (o: string, p: string) => ["org", o, "project", p, "uat"] as const,
+  uatRelease: (o: string, p: string, r: string) => ["org", o, "project", p, "uat", r] as const,
+  uatScenarios: (o: string, p: string) => ["org", o, "project", p, "uat-scenarios"] as const,
 };
 
 /** Public: whether new accounts can be created without an invite */
@@ -95,6 +98,14 @@ export const useShares = (o: string, enabled: boolean) =>
 export const useMembers = (o: string) => useQuery({ queryKey: keys.members(o), queryFn: () => api<{ members: Member[] }>("GET", `/orgs/${o}/members`).then((r) => r.members) });
 export const useInvites = (o: string, enabled: boolean) => useQuery({ queryKey: keys.invites(o), queryFn: () => api<{ invites: Invite[] }>("GET", `/orgs/${o}/invites`).then((r) => r.invites), enabled });
 export const useAudit = (o: string) => useQuery({ queryKey: keys.audit(o), queryFn: () => api<{ events: AuditEvent[] }>("GET", `/orgs/${o}/audit?limit=200`).then((r) => r.events) });
+
+export const useUatReleases = (o: string, p: string) =>
+  useQuery({ queryKey: keys.uat(o, p), queryFn: () => api<{ releases: UatRelease[] }>("GET", `/orgs/${o}/projects/${p}/uat/releases`).then((r) => r.releases) });
+export const useUatRelease = (o: string, p: string, r: string) =>
+  useQuery({ queryKey: keys.uatRelease(o, p, r), queryFn: () => api<{ release: UatRelease; criteria: UatCriterion[] }>("GET", `/orgs/${o}/projects/${p}/uat/releases/${r}`) });
+
+export const useUatScenarios = (o: string, p: string) =>
+  useQuery({ queryKey: keys.uatScenarios(o, p), queryFn: () => api<{ scenarios: UatScenario[] }>("GET", `/orgs/${o}/projects/${p}/uat/scenarios`).then((r) => r.scenarios) });
 
 /** Mutation that invalidates the given query-key prefixes on success */
 export function useAction<TVars, TOut = any>(fn: (v: TVars) => Promise<TOut>, invalidate: QueryKey[] = []) {

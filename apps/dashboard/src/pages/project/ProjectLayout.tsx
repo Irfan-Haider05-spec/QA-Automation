@@ -32,6 +32,7 @@ export function ProjectLayout() {
         <NavLink to={`${base}/issues`}>Issues<span className="count">{p.openIssues}</span></NavLink>
         <NavLink to={`${base}/environments`}>Environments<span className="count">{p.environments?.length ?? 0}</span></NavLink>
         <NavLink to={`${base}/schedules`}>Schedules</NavLink>
+        <NavLink to={`${base}/uat`}>Acceptance</NavLink>
         {can("apiKeys.manage") && <NavLink to={`${base}/api-keys`}>API keys</NavLink>}
         {can("apiKeys.manage") && <NavLink to={`${base}/ci`}>CI setup</NavLink>}
         {can("projects.update") && <NavLink to={`${base}/settings`}>Settings</NavLink>}

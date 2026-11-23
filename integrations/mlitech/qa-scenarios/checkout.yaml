@@ -1,0 +1,87 @@
+# MLITech checkout: points earned at checkout and promotion rules applied there.
+# Written against loyalty-backend-code (merchantSellManagement.service.ts `checkout`, tiers in
+# point&TierSystem). Points earned = (bill - promotion gross values) x tier accumulation % / 10.
+# These scenarios write data: they run only with allowMutations and disposable.
+version: 1
+scenarios:
+  - name: Checkout awards points by the merchant's tier rule
+    tags: [regression, uat]
+    severity: high
+    steps:
+      - name: merchant profile
+        account: merchantA
+        request: { method: GET, path: /api/v1/user/profile }
+        expect: { status: 200 }
+        save: { merchantId: $.data._id }
+      - name: merchant sets a 10% accumulation tier
+        account: merchantA
+        request: { method: POST, path: /api/v1/tier, json: { name: Gold Basic, pointsThreshold: 0, minTotalSpend: 0, accumulationRule: 10, redemptionRule: 1 } }
+        expect: { status: [200, 201], json: [{ path: $.data.accumulationRule, equals: 10 }] }
+        save: { tierId: $.data._id }
+      - name: customer opens a digital card with the merchant
+        account: customer
+        request: { method: POST, path: /api/v1/add-promotion/create-digital-card, json: { merchantId: "{{merchantId}}" } }
+        expect: { status: [200, 201], json: [{ path: $.data.cardCode, type: string }, { path: $.data.merchantId, equals: "{{merchantId}}" }] }
+        save: { cardCode: $.data.cardCode, cardId: $.data.cardId }
+      - name: merchant checks out a bill of 1000
+        account: merchantA
+        request: { method: POST, path: /api/v1/sell/checkout, json: { digitalCardCode: "{{cardCode}}", totalBill: 1000 } }
+        expect:
+          status: [200, 201]
+          json:
+            - { path: $.data.totalBill, equals: 1000 }
+            - { path: $.data.discountedBill, equals: 1000 }
+            - { path: $.data.pointsEarned, equals: 10 }
+            - { path: $.data.status, equals: completed }
+        save: { sellId: $.data._id }
+      - name: sale stored with the earned points
+        db:
+          collection: sells
+          filter: { _id: { $oid: "{{sellId}}" }, digitalCardId: { $oid: "{{cardId}}" }, totalBill: 1000, pointsEarned: 10, status: completed }
+          expect: { count: 1 }
+      - name: points credited to the card
+        db:
+          collection: digitalcards
+          filter: { _id: { $oid: "{{cardId}}" } }
+          expect: { count: 1, json: [{ path: "$[0].availablePoints", gte: 10 }, { path: "$[0].lifeTimeEarnPoints", gte: 10 }] }
+    cleanup:
+      - account: merchantA
+        request: { method: DELETE, path: "/api/v1/tier/{{tierId}}" }
+        expect: { status: [200, 204, 404] }
+
+  - name: An expired promotion cannot be used at checkout
+    tags: [regression, uat]
+    severity: high
+    vars: { title: "QA expired promo {{unique}}" }
+    steps:
+      - name: merchant profile
+        account: merchantA
+        request: { method: GET, path: /api/v1/user/profile }
+        expect: { status: 200 }
+        save: { merchantId: $.data._id }
+      - name: merchant has a promotion that ended in January 2025
+        account: merchantA
+        request:
+          method: POST
+          path: /api/v1/promo-merchant
+          json: { data: '{"name":"{{title}}","discountPercentage":20,"promotionType":"seasonal","customerSegment":"all_customer","startDate":"2025-01-01","endDate":"2025-01-31","grossValue":100}' }
+        expect: { status: [200, 201] }
+        save: { promoId: $.data._id }
+      - name: customer opens a digital card
+        account: customer
+        request: { method: POST, path: /api/v1/add-promotion/create-digital-card, json: { merchantId: "{{merchantId}}" } }
+        expect: { status: [200, 201] }
+        save: { cardCode: $.data.cardCode }
+      # Refusing the promotion here is fine too; the checkout below must refuse it either way.
+      - name: customer tries to save the expired promotion
+        account: customer
+        request: { method: POST, path: /api/v1/add-promotion/add, json: { promotionId: "{{promoId}}" } }
+        expect: { status: [200, 400, 409, 422] }
+      - name: merchant tries to apply it
+        account: merchantA
+        request: { method: POST, path: /api/v1/sell/checkout, json: { digitalCardCode: "{{cardCode}}", totalBill: 1000, promotionId: ["{{promoId}}"] } }
+        expect: { status: [400, 404, 409, 422], json: [{ path: $.success, equals: false }] }
+    cleanup:
+      - account: merchantA
+        request: { method: DELETE, path: "/api/v1/promo-merchant/{{promoId}}" }
+        expect: { status: [200, 204, 404] }

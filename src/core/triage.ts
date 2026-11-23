@@ -21,9 +21,13 @@ const normalise = (s: string) =>
 export const fingerprintOf = (f: Finding) =>
   crypto
     .createHash("sha1")
-    .update([f.plugin, normalise(f.title), normalise(f.target)].join("|"))
+    // A plugin-supplied key is the problem's exact identity and is used verbatim. Findings
+    // without one keep the fingerprints they always had.
+    .update([f.plugin, normalise(f.title), normalise(f.target), ...(f.key ? [f.key] : [])].join("|"))
     .digest("hex")
     .slice(0, 12);
+
+const MERGED_LISTED = 20;
 
 export interface KnownIssue {
   fingerprint: string;
@@ -44,15 +48,29 @@ export function triage(results: PluginResult[], known: KnownIssue[]) {
   const byFp = new Map(known.map((k) => [k.fingerprint, k]));
   const today = new Date().toISOString().slice(0, 10);
   for (const r of results) {
-    const seen = new Set<string>();
+    const seen = new Map<string, { kept: Finding; merged: string[] }>();
     r.findings = r.findings.filter((f) => {
       f.fingerprint = fingerprintOf(f);
-      if (seen.has(f.fingerprint)) return false;
-      seen.add(f.fingerprint);
+      const prior = seen.get(f.fingerprint);
+      if (prior) {
+        // An exact repeat is dropped. A different problem that happens to share the
+        // fingerprint must never disappear silently or lower the gate: the kept finding
+        // takes the higher severity and lists what was merged into it.
+        if (severityRank(f.severity) < severityRank(prior.kept.severity)) prior.kept.severity = f.severity;
+        if (prior.kept.flaky && !f.flaky) delete prior.kept.flaky;
+        if ((f.detail ?? "") !== (prior.kept.detail ?? "")) prior.merged.push((f.detail ?? f.title).split("\n")[0].slice(0, 300));
+        return false;
+      }
+      seen.set(f.fingerprint, { kept: f, merged: [] });
       const k = byFp.get(f.fingerprint);
       if (k && (!k.until || k.until >= today)) f.known = { reason: k.reason, since: k.since };
       return true;
     });
+    for (const { kept, merged } of seen.values()) {
+      if (!merged.length) continue;
+      const listed = merged.slice(0, MERGED_LISTED).map((m) => `- ${m}`).join("\n");
+      kept.detail = `${kept.detail ?? ""}\n\n${merged.length} more finding(s) with the same title and target were merged here:\n${listed}${merged.length > MERGED_LISTED ? `\n…and ${merged.length - MERGED_LISTED} more` : ""}`.trim();
+    }
   }
   return results;
 }

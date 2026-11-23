@@ -4,7 +4,7 @@ import { chromium, type BrowserContext, type Request } from 'playwright';
 import type { RunContext } from '../../core/context.js';
 import type { Finding } from '../../core/types.js';
 import { login } from '../../web/crawler.js';
-import { chromiumLaunchOptions } from '../../web/browser-options.js';
+import { bounded, chromiumLaunchOptions } from '../../web/browser-options.js';
 import { issue, localPath } from './support.js';
 
 /**
@@ -35,6 +35,8 @@ interface Observation {
   blockedDependency: boolean;
   /** The javascript: canary ran */
   scriptRan: boolean;
+  /** The page did not answer the marker check in time, so script execution is unknown. */
+  unresponsive: boolean;
 }
 
 class Inconclusive extends Error {}
@@ -54,7 +56,7 @@ export function isTopLevelNavigation(request: Pick<Request, 'isNavigationRequest
  * observeMs. Returns early when an external navigation is seen.
  */
 async function observe(context: BrowserContext, origin: string, c: ClientRedirectCase, value: string, marker: string, state: { current?: Observation }): Promise<Observation> {
-  const obs: Observation = { external: false, moves: [], blockedDependency: false, scriptRan: false };
+  const obs: Observation = { external: false, moves: [], blockedDependency: false, scriptRan: false, unresponsive: false };
   state.current = obs;
   const page = await context.newPage();
   try {
@@ -75,13 +77,17 @@ async function observe(context: BrowserContext, origin: string, c: ClientRedirec
     committed = true;
     const deadline = Date.now() + c.observeMs;
     while (Date.now() < deadline && !obs.external) await page.waitForTimeout(25);
-    obs.scriptRan = await page.evaluate(key => (window as unknown as Record<string, unknown>)[key] === true, marker).catch(() => false);
+    // A rejection means the document went away (it navigated elsewhere), so the canary
+    // did not run in it; only a real timeout leaves the result unknown.
+    const ran = await bounded(page.evaluate(key => (window as unknown as Record<string, unknown>)[key] === true, marker).catch(() => false), 5000);
+    if (ran === undefined) obs.unresponsive = true; else obs.scriptRan = ran;
     return obs;
   } finally {
     state.current = undefined;
     // popups opened by the probe page
-    for (const p of context.pages()) if (p !== page && !p.isClosed()) await p.close().catch(() => {});
-    await page.close().catch(() => {});
+    // Bounded: a page that will not close is closed with the browser at the end.
+    for (const p of context.pages()) if (p !== page && !p.isClosed()) await bounded(p.close(), 5000);
+    await bounded(page.close(), 5000);
   }
 }
 
@@ -139,6 +145,7 @@ export async function checkClientRedirects(ctx: RunContext, c: ClientRedirectCas
     }
     phase = 'javascript: URL probe';
     const sink = await observe(context, origin, c, `javascript:void(window['${marker}']=true)`, marker, state);
+    if (sink.unresponsive) throw new Inconclusive('The page stopped responding during the javascript: probe');
     if (sink.scriptRan) {
       findings.push(issue('web-client-security', 'Query input runs as a javascript: navigation', target,
         'The configured query input reached a navigation sink and an inert javascript: URL canary executed in the page. Payload, query values and page content are omitted.',
@@ -150,7 +157,7 @@ export async function checkClientRedirects(ctx: RunContext, c: ClientRedirectCas
     const why = e instanceof Inconclusive ? e.message : 'browser or page error';
     throw new Error(`Client-side redirect probe incomplete during ${phase} (${why}); check login, positive control, page readiness and blocked external dependencies`);
   } finally {
-    await browser.close();
+    await bounded(browser.close(), 15000);
   }
 }
 

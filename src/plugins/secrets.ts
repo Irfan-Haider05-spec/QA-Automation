@@ -9,9 +9,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import picomatch from "picomatch";
 import type { Finding, QaPlugin, Severity } from "../core/types.js";
 
-interface Rule { id: string; re: RegExp; severity: Severity; title: string }
+export interface Rule { id: string; re: RegExp; severity: Severity; title: string }
 
-const RULES: Rule[] = [
+export const RULES: Rule[] = [
   { id: "private-key", re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/, severity: "critical", title: "Private key committed" },
   { id: "aws-access-key", re: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/, severity: "critical", title: "AWS access key id committed" },
   { id: "stripe-live", re: /\b(sk|rk)_live_[0-9a-zA-Z]{16,}/, severity: "critical", title: "Stripe live secret key committed" },

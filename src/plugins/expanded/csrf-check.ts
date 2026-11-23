@@ -4,7 +4,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import type { RunContext } from '../../core/context.js';
 import { getPath } from '../../core/http.js';
 import { login } from '../../web/crawler.js';
-import { chromiumLaunchOptions } from '../../web/browser-options.js';
+import { bounded, chromiumLaunchOptions } from '../../web/browser-options.js';
 import { issue, localPath } from './support.js';
 
 export const csrfCaseSchema = z.object({
@@ -51,7 +51,7 @@ export async function assertStateRequiresAuth(browser: Browser, origin: string, 
     const denied = await (await anonymous.newPage()).goto(new URL(verifyPath, origin).href, { timeout: 10000 });
     const status = denied?.status();
     if (!status || ![401, 403].includes(status)) throw new Error('State must require authentication');
-  } finally { await anonymous.close(); }
+  } finally { await bounded(anonymous.close(), 5000); }
 }
 
 /** Read a JSON primitive from the state endpoint with the page's own cookies; bounded. */
@@ -146,7 +146,7 @@ export async function checkCsrf(ctx: RunContext, c: z.output<typeof csrfCaseSche
           'A browser-submitted cross-site request without copied CSRF tokens changed authenticated state. Field values, tokens and response content are omitted.', 'high', 'security', 'CWE-352')];
         await page.waitForTimeout(25);
       } while (Date.now() < deadline);
-      await attackPage.close();
+      await bounded(attackPage.close(), 5000);
     }
     if (blocked) throw new Error('External dependency blocked');
     phase = 'legitimate form positive control';
@@ -160,5 +160,5 @@ export async function checkCsrf(ctx: RunContext, c: z.output<typeof csrfCaseSche
     } while (Date.now() < positiveDeadline);
     throw new Error('Positive control had no expected effect');
   } catch { throw new Error(`CSRF probe incomplete during ${phase}; check isolated state, cookie login, POST form and dependencies`); }
-  finally { await browser.close(); }
+  finally { await bounded(browser.close(), 15000); }
 }

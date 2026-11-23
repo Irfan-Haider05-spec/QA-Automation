@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { Finding, Severity } from "../../core/types.js";
 import { checkedPlugin, issue, readJson } from "./support.js";
@@ -13,9 +14,37 @@ const sarif = z.object({ version: z.literal("2.1.0"), runs: z.array(z.object({
   invocations: z.array(z.object({ executionSuccessful: z.boolean().optional() }).passthrough()).optional(),
   results: z.array(z.object({ ruleId: z.string().optional(), level: z.enum(["none", "note", "warning", "error"]).optional(),
     message: z.object({ text: z.string().optional(), markdown: z.string().optional() }),
-    locations: z.array(z.object({ physicalLocation: z.object({ artifactLocation: z.object({ uri: z.string().optional() }).optional(), region: z.object({ startLine: z.number().optional() }).optional() }).optional() })).optional(),
-    properties: z.record(z.string(), z.unknown()).optional() }).passthrough()),
+    locations: z.array(z.object({ physicalLocation: z.object({ artifactLocation: z.object({ uri: z.string().optional() }).optional(), region: z.object({ startLine: z.number().optional(), startColumn: z.number().optional() }).optional() }).optional() })).optional(),
+    properties: z.record(z.string(), z.unknown()).optional(),
+    fingerprints: z.record(z.string(), z.unknown()).optional(), partialFingerprints: z.record(z.string(), z.unknown()).optional() }).passthrough()),
 }) ).min(1) });
+
+/**
+ * SARIF file locations relative to the backend folder, the form changed files use. Scanners
+ * write absolute paths, file:// URIs or paths relative to where they ran (the configuration
+ * folder when VeriQ runs them); every form is tried, so changed-file filtering cannot miss.
+ */
+export function sarifPaths(uri: string, backendDir: string, configDir: string): string[] {
+  let file = uri;
+  if (/^file:/i.test(file)) { try { file = fileURLToPath(file); } catch { return [uri]; } }
+  else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(file)) return [uri];
+  try { file = decodeURI(file); } catch { /* keep the raw form */ }
+  const bases = path.isAbsolute(file) ? [""] : [configDir, backendDir];
+  const out = new Set<string>();
+  for (const base of bases) {
+    const rel = path.relative(backendDir, path.resolve(base || backendDir, file)).split(path.sep).join("/");
+    if (rel && !rel.startsWith("../") && rel !== ".." && !path.isAbsolute(rel)) out.add(rel);
+  }
+  return [...out];
+}
+
+/** A scanner-supplied content fingerprint when it is a real hash (Semgrep writes "requires login" without an account). */
+function scannerFingerprint(r: { fingerprints?: Record<string, unknown>; partialFingerprints?: Record<string, unknown> }) {
+  for (const value of [...Object.values(r.partialFingerprints ?? {}), ...Object.values(r.fingerprints ?? {})]) {
+    if (typeof value === "string" && /^[0-9a-f][0-9a-f:._-]{15,}$/i.test(value)) return value;
+  }
+  return undefined;
+}
 
 const scannerSettings = z.object({ report: z.string().min(1),
   run: z.boolean().default(false), baseline: z.string().optional(),
@@ -52,13 +81,22 @@ function scanner(name: "sast" | "container-iac", executable: "semgrep" | "trivy"
       for (const result of run.results) {
         if (result.level === "none") continue;
         const loc = result.locations?.[0]?.physicalLocation;
-        const file = loc?.artifactLocation?.uri ?? "scanner";
-        if (ctx.changedFiles && !ctx.changedFiles.some((f) => f.replace(/\\/g, "/") === file.replace(/\\/g, "/"))) continue;
+        const uri = loc?.artifactLocation?.uri;
+        const candidates = uri ? sarifPaths(uri, ctx.config.backend.dir, ctx.configDir) : [];
+        // Shown relative to the backend folder: never a local machine path.
+        const file = candidates[0] ?? uri ?? "scanner";
+        if (ctx.changedFiles) {
+          const changed = new Set(ctx.changedFiles.map((f) => f.replace(/\\/g, "/")));
+          if (!candidates.some((c) => changed.has(c))) continue;
+        }
         const severity: Severity = result.level === "error" ? "high" : result.level === "note" ? "low" : "medium";
         findings.push({ ...issue(name, `Scanner rule: ${result.ruleId ?? "unclassified"}`, `${file}:${loc?.region?.startLine ?? 0}`,
           // Scanner message/snippet can contain source secrets. Keep the rule ID
           // and location here; retain the scanner report under CI access control.
           `Reported by ${run.tool.driver.name}. Inspect the protected scanner report for details.`, severity),
+          // Rule, file and position (or the scanner's own hash) identify one match; two matches
+          // of one rule in one file are two findings.
+          key: `${result.ruleId ?? "unclassified"}|${file}|${scannerFingerprint(result) ?? `${loc?.region?.startLine ?? 0}:${loc?.region?.startColumn ?? 0}`}`,
           evidence: { file, line: loc?.region?.startLine }, ...(known.has(signature(result)) ? { known: { reason: "Present in explicit scanner baseline" } } : {}) });
       }
     }

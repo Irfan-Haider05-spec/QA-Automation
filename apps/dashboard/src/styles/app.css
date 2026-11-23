@@ -177,6 +177,10 @@ table.table { width: 100%; border-collapse: collapse; }
 /* Hosted jobs: running pulses (the one moving thing on the page), queued is hollow */
 .status.running::before { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 .status.queued::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.status.uat-untested::before, .status.uat-open::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.status.uat-passed::before, .status.uat-signed_off::before { background: var(--pass); }
+.status.uat-failed::before, .status.uat-rejected::before { background: var(--fail); }
+.status.uat-blocked::before { background: var(--env); }
 @keyframes pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .status.running::before { animation: none; } }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--sunken); color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }

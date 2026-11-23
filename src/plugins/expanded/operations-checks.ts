@@ -3,7 +3,7 @@ import path from "node:path";
 import tls from "node:tls";
 import { Resolver } from "node:dns/promises";
 import { z } from "zod";
-import type { Finding } from "../../core/types.js";
+import { SkipError, type Finding } from "../../core/types.js";
 import { checkedPlugin, issue, localPath, readJson, request, requestSchema } from "./support.js";
 import { executeK6 } from "../../core/k6-execution.js";
 import { errorSourceSchema, readErrorSource, type ErrorEvent } from "./error-source.js";
@@ -194,6 +194,7 @@ export const loadStress = checkedPlugin("load-stress", "perf", "Import k6 handle
     .refine(c => !!c.report !== !!c.execution, "Configure either report import or execution, not both"),
   async (ctx, c) => {
     if (c.execution && c.minRequests > c.execution.iterations) throw new Error("minRequests exceeds the configured iteration count");
+    if (c.execution && !ctx.config.target.baseUrl) throw new SkipError("no target URL (set QA_BASE_URL or --base-url)");
     const executed = c.execution ? await executeK6(ctx, c.execution, c) : undefined;
     const metric = z.object({ values: z.record(z.string(), z.number()), thresholds: z.record(z.string(), z.object({ ok: z.boolean() })).optional() });
     const doc = z.object({ metrics: z.record(z.string(), metric) }).parse(readJson(ctx, executed?.report ?? c.report!));
@@ -207,3 +208,8 @@ export const loadStress = checkedPlugin("load-stress", "perf", "Import k6 handle
     if (executed && ((executed.exitCode === 99) !== failedThreshold)) throw new Error("k6 exit status contradicts threshold results; no successful result accepted");
     return { findings, stats: { requests: n, p95Ms: p95, errorRate: rate } };
   });
+
+// These read their own inputs and never call the target API.
+tlsDnsMail.usesTarget = () => false;
+postDeployErrors.usesTarget = () => false;
+loadStress.usesTarget = (ctx) => !!(ctx.config.pluginSettings?.["load-stress"] as { execution?: unknown } | undefined)?.execution;

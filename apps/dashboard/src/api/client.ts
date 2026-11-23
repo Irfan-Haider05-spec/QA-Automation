@@ -89,6 +89,23 @@ export async function api<T = any>(method: string, path: string, body?: unknown,
   return json as T;
 }
 
+/** A text download (for example a Markdown report), with the same session handling as api(). */
+export async function apiText(path: string, retry = true): Promise<string> {
+  const s = session.get();
+  const res = await fetch(`${API_BASE}${path}`, { headers: s ? { authorization: `Bearer ${s.accessToken}` } : {} });
+  if (res.status === 401 && s && retry) {
+    if (await refresh(s.accessToken)) return apiText(path, false);
+    onSignedOut();
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    let e: any;
+    try { e = JSON.parse(text)?.error; } catch { /* not JSON */ }
+    throw new ApiError(res.status, e?.code ?? "http_error", e?.message ?? `Request failed (${res.status})`);
+  }
+  return text;
+}
+
 /** Human message for an error, including field-level validation details */
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) {

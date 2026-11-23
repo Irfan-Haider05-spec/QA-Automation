@@ -76,6 +76,8 @@ jobs:
       # Agent: the accounts seed-ci.ts creates
       QA_CORS_ORIGINS: https://business.qa.invalid,https://admin.qa.invalid
       QA_ALLOW_MUTATIONS: "true"
+      QA_DISPOSABLE: "true" # this database is thrown away after the job: scenarios may write
+      QA_DB_URL: mongodb://localhost:27017/mlitech_qa?replicaSet=rs0&directConnection=true # scenario database steps and data checks (same throwaway database)
       QA_RPM: "600" # local backend, QA traffic only
       QA_SOCKET_URLS: http://localhost:5004,http://localhost:5005 # two instances, one Redis
       QA_MERCHANT_A_ID: qa-merchant-a@qa.invalid

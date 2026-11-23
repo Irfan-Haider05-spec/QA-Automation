@@ -1,5 +1,708 @@
 # VeriQ validation and fixes
 
+## Live MLITech acceptance, scenario lint, Newman reports and UAT evidence — 19 November 2026
+
+### How the live run was set up
+
+The MLITech backend (`tmhdigital/loyalty-backend-code`, commit `ac766c4`) was built with
+`npm run build` and started twice (ports 5004 and 5005, one Redis), on MongoDB 8.3.7 started
+as a single-node replica set. MongoDB came from the conda-forge package (a package
+registry); Docker Hub is blocked here. VeriQ's `seed/seed-ci.ts` created the QA accounts
+(now with an active customer subscription, which checkout requires), with the environment
+values from `integrations/mlitech/qa.yml`. All data was local and thrown away; nothing was
+sent outside the sandbox. This session's work before a pause had already made this setup;
+it was not written to F: or documented then, so every result below was produced again in
+this round with the current code.
+
+### Results on the real backend
+
+| Check | Result |
+|---|---|
+| PR suite (`integrations/mlitech/qa.config.ts --suite pr`, 12 checks, 539 requests) | Gate failed: 11 critical, 18 high, 66 medium, 7 low |
+| api-auth | 4 routes answer without a token (the 3 report exports, `GET /tier/merchant/:userId`) |
+| api-scenarios (13 MLITech scenarios) | 4 passed, 9 failed (below) |
+| scenario-lint | 0 problems: every scenario path, account and variable matches the backend |
+| db-checks (10 rules) | 0 findings on the seeded data |
+| tenant-isolation | Merchant B can read merchant A's promotion through `GET /promo-merchant/:id`, a route without auth; the team must say whether promotion details are public |
+| socket-fanout | `salesActivation` reaches every connected user (`io.emit`); a test notification reached no socket; 4 sockets of one user stay open (cap 3) |
+| api-smoke | 2 routes return 500 (`/merchant/customer-chart-week`, and the business-customer export without dates) |
+| health-cors | The look-alike origin probes were all refused; a refused origin returns 500 (low) |
+| injection-probes (3 cases, 36 requests) | No injection; an operator object in the customer search causes a 500 (medium) |
+| mongo-indexes live (27 collections, 220 query plans) | 31 findings, 2 high: the unique `email` and `phone` indexes cannot be built |
+
+Failed scenarios, each checked against the code:
+
+1. A customer can open `GET /usermanagement/merchants/all-users` (200, expected 403).
+2. Sign-up accepts `verified`, `subscription` and points from the body: the account logs in
+   without verification, and the database holds `verified: true`, `subscription: active`
+   and 99999 points for it.
+3. `POST /user/create-admin` without a token creates a verified `SUPER_ADMIN` (seen in the
+   database).
+4. Merchant B can change merchant A's promotion (`findByIdAndUpdate` by id only). From the
+   code, delete and toggle have the same gap, and so do tier update and delete.
+5. An expired promotion is applied at checkout: checkout checks `expiryDate`, which
+   promotions never set (they store `endDate`), and no job marks promotions expired.
+6. to 8. A promotion is accepted with its end before its start, a 150% discount and a
+   negative value.
+9. Adding a VIP-only promotion as a new customer returns 500 instead of a client error.
+
+The index finding was confirmed directly: `users` has no `email` or `phone` index, and
+creating `{ email: 1 }` unique with `partialFilterExpression: { email: { $exists: true,
+$ne: null } }` fails with "CannotCreateIndex". Mongoose only logs this at boot.
+
+### VeriQ changes in this round
+
+1. **`scenario-lint`** (new static plugin, 54 in total): checks scenario files against the
+   discovered routes without a target. It reports unknown paths and methods, unknown
+   accounts, variables used before they are defined, success expected from a route the
+   account may not call, and bodies missing fields the route's validation requires.
+   Refusal expectations are not questioned. Extra body fields are not reported, because
+   zod strips unknown keys; an early version did report them, and the fixture showed that
+   to be a false positive. A template on a `:param` is preferred over a literal route.
+2. **Newman (Postman) JUnit**: Newman names assertions the same in every request. One
+   pass and one failure under the same name were read as one test, so they merged in
+   `test-results` and looked flaky in `flaky-tests`. When a name appears in more than one
+   suite, the suite name is now put in front. Unique names, and repeats inside one suite,
+   are unchanged, so existing history keeps matching.
+3. **UAT automated evidence** (finished from the earlier work): scenario outcomes are
+   uploaded per run (migration `016_run_cases.sql`, row-level security). A criterion
+   linked to a scenario shows its latest result and can attach that run. New: `GET
+   …/uat/scenarios` lists the project's scenario names with their latest result (optional
+   tag filter). The criterion form suggests them.
+4. **`mongo-indexes`** (from the earlier work): "Index can never be built" for unsupported
+   `partialFilterExpression` operators (static), and "Declared index is missing from the
+   database" (live).
+5. **`injection-probes`**: a 500 on operator input is now titled "Operator input causes a
+   server error". The earlier wording claimed the input reaches the database, which cannot
+   be seen from outside: MLITech's sanitizer strips the `$` key and a string method then
+   fails.
+6. MLITech pack: `integrations/mlitech/qa-scenarios/` (13 scenarios) and
+   `qa-db-checks/` (10 rules), wired into the PR suite with `scenario-lint`. The
+   socket test paths were corrected (`/notifications/…`, as the backend mounts them).
+
+Tests added: `test/scenario-lint.test.ts` (5), `test/junit-newman.test.ts` (3), the
+scenario-list part of the UAT API test (with access checks), and a dashboard browser test
+with an axe check: pick a scenario, see its latest result, and attach the run. Mutation
+check: 12 deliberate faults. 11 were caught; the twelfth exposed redundant code in
+scenario-lint, which was removed.
+
+### Suites
+
+| Suite | Result |
+|---|---|
+| Engine, API, runner and dashboard typechecks | Passed |
+| `test:expanded` with real PostgreSQL 16, MariaDB 10.11 and MongoDB 8.3.7 | 206 tests: 202 passed, 2 skipped (k6 and MobSF prerequisites), 2 failed (Firefox and WebKit cannot be installed in this sandbox, unchanged) |
+| MongoDB live tests (db-checks, scenario database steps, mongo-indexes live) | 3 passed |
+| Self-test / GitHub Action simulation | All checks passed |
+| Hosted runner | 13 passed |
+| API on PGlite, and on PostgreSQL with the `qa_app` role and RLS | 122 passed each |
+| Dashboard build | Passed (bundle-size warning unchanged) |
+| Dashboard browser tests | 71 passed, 1 skipped (optional screen capture) |
+
+### Not established
+
+- The deployed staging: the run above used the repository's 23 October commit on a local
+  throwaway database, not the team's current code or environment.
+- Windows: the full suite has not been run on the user's machine in this round.
+- MobSF and the recorder session (Chunks 2 and 3) are unchanged.
+
+## Real-project acceptance, static part (MLITech backend) — 19 November 2026
+
+Target: the public MLITech backend repository (`tmhdigital/loyalty-backend-code`, commit
+`ac766c4`, 23 October 2026), cloned read-only into the sandbox. Its dependencies were
+installed with `--ignore-scripts`; its `package-lock.json` was restored afterwards. No
+deployment, staging URL, account or database was used, so only checks that read source,
+configuration and the lockfile ran. Nothing was sent to a third party.
+
+Checks run and how each result was verified by hand:
+
+| Check | Result | Verification |
+|---|---|---|
+| route discovery | 202 routes, 25 request schemas | Compared with `src/app/routes/index.ts` and module routers |
+| route-auth | 24 findings, 4 critical | All 4 critical confirmed in source (below); sampled role and duplicate-route findings confirmed |
+| env-drift | 36 findings | `DATABASE_URL` vs `MONGODB_URI`, `SESSION_SECRET`, `ENCRYPTION_KEY`, `REDIS_URL` confirmed |
+| secrets | 0 | Independent pattern search found only `.env.example` placeholders |
+| deps | 22 packages (2 critical, 14 high, 17 moderate advisories) | Matches `npm audit`; every advisory has a fix |
+| validation-coverage | 59 routes | Sampled routes have no `validateRequest`; the unused `validateFormData` helper is not counted |
+| code-quality | 0 | `tsc --noEmit` and `eslint src` run directly: 0 errors, 0 warnings |
+| mongo-indexes | 33 findings (24 query shapes, 9 redundant indexes) | Sampled shapes (`User { fcmToken }`, `Token { token }`) have no index; `AdminTier { admin: 1 }` is a prefix of a compound index |
+| log-hygiene | 0 | The winston format prints only the message, so logged error objects are not written |
+| sast (Semgrep 1.185.0) | 20 matches | Rules from the public semgrep-rules repository (registry blocked here); the two regular-expression findings are real (below) |
+
+No false positive was found among the verified findings.
+
+### VeriQ problems found by this run, and the fixes
+
+1. **Findings silently dropped (high).** Triage removed every finding whose fingerprint
+   (plugin, title, target with numbers ignored) matched an earlier one, even when the
+   problem was different. On MLITech, 14 of 33 missing-index findings (10 shapes of
+   `User` became one) and 10 of 20 Semgrep matches (line numbers are ignored) disappeared
+   without a trace. The same would happen to two new required parameters of one API
+   operation, or to parameterised tests named `case 1` and `case 2`.
+   - A finding may now carry a `key`, its exact identity, which is added to the
+     fingerprint. Findings without a key keep exactly the fingerprint they had.
+   - `mongo-indexes` targets are now the model plus the query shape or index
+     (`User { fcmToken }`). `sast`/`container-iac` key on rule, file and position (or a
+     real scanner hash), `api-contract` on title and detail, and `test-results` and
+     `flaky-tests` on the exact test name.
+   - Triage still drops exact repeats. A different finding that shares a fingerprint is
+     merged into the kept one and listed in its detail, and the kept finding takes the
+     worst severity and stays blocking if any occurrence is, so a merge can never weaken
+     the gate.
+   - One-time effect: the fingerprints of those five plugins change, so their known
+     issues need `qa run --baseline` again, and on the platform their old issues close
+     and new ones open once.
+2. **Pull-request scanner runs reported nothing (high).** SARIF locations were compared
+   as raw text with changed files, which are relative to the backend folder. Semgrep and
+   Trivy write absolute paths when VeriQ runs them, so with `--changed-from` every match
+   was filtered out. Absolute paths, `file://` URIs and paths relative to the configuration
+   or backend folder are now all resolved. Targets are shown relative to the backend, not
+   as a local machine path.
+3. **One long finding could make the whole upload fail (medium, latent).** The engine
+   accepts details of up to 20 000 characters, but the platform accepts 5 000 (titles and
+   targets 500, reasons 2 000) and rejects the entire run otherwise. Uploads now shorten
+   longer text with a marker pointing to `report.json`, and leave out the engine-only
+   `key`.
+4. **CORS bypass not detected (miss).** MLITech trusts any `*.vercel.app` origin that
+   contains `rewaldo-admin` or `rewaldo-business`, with credentials. `health-cors` only
+   probed one unrelated origin, so this could not be found. It now also probes, from each
+   configured dashboard origin, an attacker-ownable look-alike (`https://app.example.com.qa-evil-origin.example`
+   and `https://qa-evilapp.example.com`), the `http://` version of an `https://` origin, and
+   the `null` origin. Ports in host names, IP addresses, single-label hosts and origins the
+   project allows on purpose are not probed. Credentials decide high or medium.
+
+Tests added: `test/triage.test.ts` (6) and `test/cors-probes.test.ts` (6). The CORS tests run
+real HTTP servers, including one with MLITech's callback copied verbatim, one with an exact
+allow-list (no findings) and ones with `startsWith`, an unanchored pattern and `null`. Two
+`mongo-indexes` tests now assert the per-shape targets and that every finding survives triage.
+Mutation check: 17 deliberate faults (probes disabled, no look-alike filter, severity ignoring
+credentials, allowed origins not removed, ports ignored, 500 finding dropped, old changed-file
+comparison, no scanner key, absolute display, no worst severity, merged flaky finding, key
+ignored, reason or key in uploads, no keys in api-contract/test-results): all 17 caught.
+
+### Results after the fixes
+
+| Suite | Result |
+|---|---|
+| Engine, API, runner and dashboard typechecks | Passed |
+| `test:expanded` with `QA_TEST_PG_URL` and `QA_TEST_MYSQL_URL` | 194 tests: 190 passed, 2 skipped (k6 and MobSF prerequisites), 2 failed (Firefox and WebKit cannot be installed in this sandbox, unchanged) |
+| Self-test | All checks passed |
+| GitHub Action simulation | All checks passed |
+| Hosted runner | 13 passed |
+| API on PGlite, and on PostgreSQL 16 with the `qa_app` role and RLS | 121 passed each |
+| MLITech static run after the fixes | 174 findings (all present), 12 blocking, exit code 1; Semgrep 20 of 20 |
+
+The dashboard was not changed in this round, so its build and browser tests were not rerun.
+
+### Not established by this run
+
+- Live checks (API authorization, tenant isolation, CORS, sockets, dashboards, flows)
+  need a running MLITech deployment with QA accounts. The new CORS probes were tested
+  against MLITech's callback in a local server, not against its deployment.
+- The repository copy is from 23 October 2026; the team's current code may differ.
+- MongoDB live analysis is still unvalidated (no server available here).
+- Not detected by VeriQ, found by hand: `package-lock.json` is out of sync with
+  `package.json` (`npm ci` fails), hidden because the Dockerfile and CI use `npm install`.
+  Checking this needs a full semver resolver, which VeriQ does not have without a new
+  dependency. Also by hand: morgan logs full URLs including payment-callback query
+  parameters (low).
+
+## Database checks, injection probes and UAT sign-off — 19 November 2026
+
+Engine, API and runner typechecks and the dashboard build passed.
+
+Test servers used in this Linux sandbox: PostgreSQL 16.15 (installed in the image, started
+for the run), MariaDB 10.11.14 (installed with apt for the run), the `mysql2` driver
+installed without changing `package.json` or `package-lock.json`, and embedded PostgreSQL
+(PGlite). No MongoDB server could be obtained (not in the Ubuntu archive, download site
+blocked, no Docker daemon).
+
+`test/db-checks.test.ts`: **6 passed** with `QA_TEST_PG_URL` and `QA_TEST_MYSQL_URL` set
+(without them, the two real-server tests are reported as skipped).
+- **Same rules on all three engines** (embedded PostgreSQL, real PostgreSQL, real
+  MariaDB): one orphan promotion, a case-insensitive duplicate email and an
+  expired-but-active promotion are found with sample ids. Emails in samples are
+  redacted. A missing table is reported as "could not run". A write hidden in a
+  function is refused by the database's READ ONLY transaction, and the audit table
+  stays empty.
+- **Server time limits:** `pg_sleep(5)` is stopped by PostgreSQL's statement timeout
+  and `SLEEP(5)` by MariaDB's limit, both within 4 seconds.
+- **Passwords:** a wrong password is reported without showing it.
+- **Row limit:** 10 005 rows are read as "10000 or more".
+- **Validation before any query:** data-changing CTEs, multiple statements,
+  comments, `SELECT … INTO`, templates inside SQL, `UPDATE`, `FOR UPDATE`, MongoDB
+  fields for SQL and the reverse, `$out`, and duplicate names are all rejected, while
+  literals and `replace()` are accepted.
+- **MongoDB helpers:** forbidden stages and operators, Extended JSON to BSON, BSON
+  to plain values, and a connection error without the password.
+
+API scenarios with database steps: **9 passed**. A title returned by the fixture API is
+checked against the stored row, the stored id is used in the next request, and a
+missing row fails the step. A db step without a database setting, and a `DELETE`
+query, are configuration errors. The database is unchanged afterwards.
+
+Found by the real servers:
+1. node-postgres returns `bigint` (for example `COUNT(*)`) as text, so `equals: 3`
+   failed on real PostgreSQL but not on PGlite. Safe integers are now numbers, as with
+   MySQL and PGlite.
+2. `FOR UPDATE` was rejected with the less clear "UPDATE is not allowed"; the row-lock
+   check now runs first.
+
+`test/injection-probes.test.ts`: **6 passed**, against a test API (`test/injection-api.ts`)
+whose SQL routes run real PostgreSQL queries built by string concatenation, next to
+parameterised twins. Its NoSQL routes evaluate MongoDB-style operators the way an
+unvalidated `findOne(req.body)` would; this is a simulation, since no MongoDB server was
+available.
+- **NoSQL:** an operator login bypass and a widened search are found (critical). A
+  safe twin is quiet. A crash on operator input is reported as medium.
+- **SQL:** a boolean bypass on a login and a search, an exposed syntax error, and a
+  blind route by time delay (only with `timeBased`) are found. A parameterised route
+  is quiet.
+- **Safety:** no stacked or data-changing SQL is sent, and table counts are
+  unchanged.
+- **No false positives:** a flaky endpoint and an endpoint that treats any quote as a
+  wildcard are not reported.
+- **Inconclusive cases:** a control that is already "successful", or one refused for
+  an account, is inconclusive. If every case is inconclusive, the check errors.
+- **Gating:** the check is skipped outside a disposable environment.
+
+Found by the tests:
+1. A 401 control was treated as "the account does not work", so login bypasses (whose
+   control is a normal 401) were never tested. The rule now applies only to cases run
+   with an account.
+2. The SQL Server `'; WAITFOR DELAY` payload was a stacked statement, contradicting the
+   "no stacked statements" rule; it was removed and the docs say SQL Server time checks
+   are not included.
+
+UAT, API `apps/api/test/uat.test.ts`: **3 passed** on PGlite and on real PostgreSQL with
+production roles (`qa_owner` migrations, API as `qa_app` with RLS). The full API suite
+(**121**, including the isolation test that every org table has RLS) passed on both.
+- **Release lifecycle:**
+  - create with criteria;
+  - a case-insensitive duplicate name is refused;
+  - a failed result needs a note;
+  - evidence must be a run of the same project;
+  - developers cannot decide, and sign-off is refused (422) while a criterion is
+    not passed;
+  - an admin signs off.
+- **Lock:** five kinds of change are refused with `release_locked`; reopening needs a
+  reason; rejecting needs a reason.
+- **Audit:** events are recorded for every step.
+- **Report:** JSON and Markdown, with `|` and newlines escaped.
+- **Access:** non-members get 404, as does a client-scoped member reaching another
+  client's project, a release id under another project, and a release from another
+  org. Viewers read only, and malformed ids get 404.
+
+UAT, dashboard `e2e/uat.spec.ts`: **3 passed**, served with the production CSP.
+- **Release flow:** create a release from the Acceptance tab (blank lines trimmed),
+  record a pass with an evidence run and a failure with a required note; sign-off
+  stays disabled until everything passed; then sign off.
+- **Lock:** the forms disappear after the decision.
+- **Report download:** `uat-v2-3-promotions.md` with the decision and rows.
+- **Reopen and viewers:** reopening works, and a viewer sees results but no
+  record/decide controls.
+- **Accessibility:** axe (WCAG 2 A/AA) found no problems on the list, the
+  new-release dialog, the release page and the sign-off dialog, and the browser
+  logged no errors.
+
+Mutation checks, each made a test fail and was restored:
+- **Database checks (11):** PostgreSQL and MySQL not read-only, bigint as text, no
+  keyword check, comments allowed, MongoDB writes allowed, truncation hidden, no
+  default "no rows", unredacted samples, no default for db steps, db params not
+  interpolated.
+- **Database timeout:** removing the per-query PostgreSQL statement timeout alone did
+  not fail a test, because the client sets the same limit for the connection. Removing
+  both failed the timeout test, so the two layers are redundant, not untested.
+- **Injection probes (11):** no repeat confirmation, no FALSE check, accepted control
+  not inconclusive, account 401 ignored, any 401 inconclusive, no error-based, no
+  time-based, query operators flattened, runs outside disposable environments, all
+  inconclusive passing, crashes ignored.
+- **UAT (9):** sign-off with open criteria, decided release editable, failed without
+  note, foreign evidence run, reject without reason, developers deciding, unescaped
+  Markdown, a release from another project, no RLS policy.
+
+Full results in this Linux sandbox:
+- **Engine suite:** `test:expanded` with the real database flags: 182 tests, 178
+  passed, 2 skipped (k6/MobSF prerequisites), 2 failed only because Firefox and
+  WebKit cannot be installed here.
+- **Other suites:** selftest, `test:action`, runner (13/13), API (121/121 on PGlite
+  and on real PostgreSQL) and dashboard e2e (70 passed, 1 skipped screenshot capture)
+  passed.
+- **Count test:** changed from 51 to 53 because two checks were added.
+- **Still pending:** a Windows run and MongoDB acceptance.
+
+## API scenarios — 18 November 2026
+
+Engine, API and runner typechecks passed. New `test/api-scenarios.test.ts`: **8 passed**,
+run against the repository's fixture backend (an Express API laid out like MLITech, with
+planted defects) started for the test, using the real HTTP client and QA-account login.
+Covered:
+- read scenarios passing: status, time, headers, every/some, schema with an `objectid`
+  format, saved variables;
+- a planted tenant leak found (merchant B reads merchant A's promotion), with a critical
+  finding naming step 2, HTTP 200 and a curl command without the token;
+- snapshots: "not recorded" (blocking), recorded with `--baseline` (ignored fields
+  removed), matched, then a changed value reported by path;
+- the JSON and JUnit reports, with the JUnit read back by VeriQ's own parser;
+- writing scenarios skipped outside a disposable environment, and inside one the
+  planted "create is not persisted" defect caught at the read-back step;
+- cleanup run after the failure, with a cleanup step whose variable was never saved
+  skipped;
+- tags from settings, `excludeTags` and `QA_SCENARIO_TAGS`, and no matching tag
+  reported as skipped;
+- time limits, query strings from `QA_*` variables, unknown variables, non-`QA_`
+  variables refused, and an unreachable target;
+- a step without expectations must return 2xx, later steps are not sent, and a path
+  variable cannot add segments;
+- configuration errors naming the file (invalid YAML, an unquoted `$.data[0]` with a
+  hint, duplicate names, assertions without an operator, `$ref`, absolute URLs, unknown
+  fields, invalid regex), plus JSON scenario files;
+- JSON path, assertion, schema-subset and snapshot helpers.
+
+Found and fixed while testing:
+1. Pre-existing: the shared JUnit parser did not decode XML entities, so a test called
+   "doesn't crash" was reported as "doesn&apos;t crash", and reporters writing
+   `&#39;` instead would split one test into two identities in the flaky-test history.
+   The 5 predefined entities and numeric references are now decoded; unknown entities
+   and invalid references stay as written (entity expansion stays off, DOCTYPE is still
+   refused). Test added to `flaky-tests`.
+2. A step that already failed also produced "snapshot not recorded"; snapshot handling
+   now runs only for steps without other failures.
+3. "No JUnit file matches" was shown for scenario and log files; the message now names
+   the kind of file.
+4. In YAML flow style, `{ id: $.data[0].id }` is a syntax error; the error now says to
+   quote such paths, and the docs and starter file show it.
+
+Mutation checks, each made a test fail and was restored (18): writes without a
+disposable environment, no cleanup after failure, continuing after a failed step, path
+values not encoded, templates always strings, snapshots not compared, missing snapshots
+silent, any environment variable allowed, no default 2xx, saved values ignored, no JUnit
+escaping, `QA_SCENARIO_TAGS` ignored, inherited properties reachable, additional
+properties ignored, secrets printed, unknown schema keywords accepted, ignore paths not
+applied, snapshot noise on failed steps.
+
+CLI with the starter file `examples/api-scenarios.yaml` on the fixture: read-only run 2
+passed, 1 failed (tenant leak, critical), 2 writing scenarios skipped, exit 1; disposable
+run also caught the unpersisted create, exit 1; `QA_SCENARIO_TAGS=smoke` ran the 2 smoke
+scenarios, both passed, exit 0.
+
+Full results in this Linux sandbox: `test:expanded` 169 tests, 165 passed, 2 skipped
+(k6/MobSF prerequisites), 2 failed only because Firefox and WebKit cannot be installed
+here; selftest, `test:action`, API (118/118), runner (13/13) and the dashboard build
+passed. The registered-check count test changed from 50 to 51 because a check was added.
+
+## Functionality audit — 18 November 2026
+
+Scope: the target health check, every plugin's declared prerequisites against what it
+actually uses, every CLI command, the dashboard build, end-to-end tests and dogfood
+crawl, and VeriQ's own checks run on VeriQ's code. Fixes, each with a test:
+
+1. Static-only runs failed when the API was down. The CLI health-checked the target
+   whenever a URL was configured, so `--only code-quality` exited 3 if the API was
+   unreachable. It now checks the target only when a selected check that will run talks
+   to it (`targetNeeded` in the runner). Plugins declare this: by default, the `baseUrl`
+   need or a non-static layer. `log-hygiene` (canary only), `load-stress` (k6 execution
+   only) and `i18n-rtl` (RTL pages only) depend on their settings, and `tls-dns-mail`
+   and `post-deploy-errors` never call the API. `test/target-health.test.ts` covers
+   the decision and the real CLI with the target down: static checks are judged on
+   their findings, and `health-cors` still exits 3.
+2. `load-stress` with k6 execution and no target URL errored. It is now skipped with
+   the same prerequisite message as other checks.
+3. Route discovery stopped every run. A project whose backend is not Express-shaped
+   could not run `--only secrets`. Discovery errors now stop a run only when a selected
+   check reads routes (live checks, OpenAPI users, `route-auth`, `validation-coverage`).
+   Checked on VeriQ's own repository: `secrets` ran with a warning, and `route-auth`
+   still failed with the discovery error.
+4. Errors thrown by synchronous CLI commands crashed with a stack trace and exit 1
+   instead of `qa: message` and exit 2 (for example `uptime-export --file ../x.jsonl`).
+   Every command now goes through the same error path. The uptime test asserts exit 2,
+   the message and no stack trace.
+5. `uptime-export` with a mistyped file printed an empty history. It now errors.
+   `wait-for --timeout abc` returned "timed out" immediately; the value is now
+   validated.
+6. The dashboard's production Content-Security-Policy made the browser report an error
+   on every page. Zod probes `new Function("")` (caught, but browsers still report the
+   CSP violation). Found because `vite preview` now sends the same security headers as
+   the Cloudflare `_headers` file (one shared definition), so the dogfood crawl and the
+   e2e tests run under the production CSP. The dogfood crawl then reported the error
+   on all 19 pages and six e2e tests failed on their "no browser errors" check. Fix:
+   `@qa/shared/browser`, imported first by the dashboard, turns off Zod's compilation
+   (validation results are unchanged), so the probe never runs. Afterwards: dogfood 0
+   findings (no missing security headers either), e2e 67 passed, 1 skipped (the
+   screenshot capture, which runs only with `SCREENSHOTS=1`). The generated `_headers`
+   file is byte-for-byte unchanged.
+7. `log-hygiene` and the Mongoose discovery skipped `.tsx`/`.jsx` files. Run on the
+   dashboard, they read 7 of 51 files. Both now parse TSX/JSX in the right mode. A test
+   puts a logging call after JSX, which a wrong parser mode misreads; the mutation test
+   for that case fails as intended.
+8. A false positive found by running `log-hygiene` on VeriQ: `console.log("::add-mask::"
+   + secret)` registers a value for masking in GitHub Actions and is not a log line. It is
+   no longer reported, with a test.
+
+VeriQ checked by its own checks: `log-hygiene` source scan of the API, runner, engine and
+dashboard found no leaks. `secrets` on the repository found only deliberate test-fixture
+passwords in test files. Lighthouse, ZAP baseline, crawl and accessibility on the
+dashboard: 0 findings.
+
+CLI commands exercised: `help`, an unknown command (exit 2), `plugins` (50 listed),
+`discover`, `wait-for`, `init` in an empty folder, `uptime-export`, `run` with an unknown
+plugin, an unknown suite and a missing config (all exit 2 with a message), `record` and
+`flow-import` without arguments.
+
+Remaining warning, not a functional fault: the dashboard bundle is 587 kB (Vite
+suggests code splitting).
+
+Results in this Linux sandbox: engine suite 160 tests, 156 passed, 2 skipped (k6/MobSF
+prerequisites), 2 failed only because Firefox and WebKit cannot be installed here.
+Selftest, `test:action`, API (118/118), runner (13/13), the dashboard build and the
+dashboard e2e tests (67 passed, 1 skipped) passed. Because `test:all` chains its steps with `&&`, it stops at those two browser failures
+here, so the later steps were run one by one. A Windows run is still pending.
+
+## MongoDB index check and log hygiene — 18 November 2026
+
+Engine, API and runner typechecks passed.
+
+`test/mongo-indexes.test.ts`: **6 passed**, on a backend fixture laid out like MLITech
+modules (a `User` model with field, nested, array, text and compound indexes; a
+`Promotion` model exported as `mongoose.models.X || mongoose.model(...)`; a `Category`
+model with an inline schema and a custom collection; a service importing them, one
+under another name). Covered: discovered models, indexes and collection names; 13
+analysed queries, 2 dynamic, 1 unfiltered and 1 `$text` counted rather than guessed;
+test files and `node_modules` ignored; eight unindexed shapes reported once each with
+locations (including an `$or` branch, `countDocuments` through a renamed import,
+`updateMany`, `distinct`, the first `$match` of `aggregate`, and a sort-only query); no
+report for indexed fields; one duplicate and one redundant index; `knownIndexes`,
+`ignoreModels`, an unknown model in `knownIndexes`, no backend; live-mode settings, and a
+real driver connection to a closed port whose error does not contain the password;
+plans in classic, slot-based and aggregate explain shapes; `$indexStats` (excluding
+`_id`, unique, TTL and recently restarted); profiler grouping without filter values;
+probe queries; settings validation.
+
+Checked against real Mongoose 8.24.10 (installed only for this comparison): the fixture
+models loaded in Mongoose produce exactly the indexes, options and collection names the
+static discovery reports, and Mongoose itself warns about the duplicate `email` index
+the check reports. The collection-name rules match `mongoose.pluralize()` on 37 names;
+the test keeps that recorded table. My first expectation (`Leaf` → `leaves`) was wrong:
+Mongoose uses `leafs`.
+
+Not validated: the live mode against a real MongoDB server. No server can be started
+here (no MongoDB binary, the download site is blocked, no Docker daemon) and none was
+reachable from the connected computer's sandbox. Live acceptance against the
+project's local or staging database is an open gap.
+
+`test/log-hygiene.test.ts`: **5 passed**. Source: nine leaking logging calls found
+(`logger`, `errorLogger`, `console`, `this.logger`, morgan with `:req[authorization]`)
+and six safe ones not reported. Log output: password, token, header, JWT, key, database
+URL, card, email, phone and ID rules by line on realistic lines, masked values and a
+"invalid password: …" message not reported, and no value from the log appearing in any
+finding; PII toggles and ignored domains. Canary against a local HTTP server writing a
+real log file: a leaking API (critical finding with the field name), a safe API (pass),
+a silent log (error), a log rotated during the request (read from the start), and no
+canary outside a disposable environment while other parts still run.
+
+Bug found by a test: the email rule matched `Pa55word@db.internal` inside
+`mongodb://app:Pa55word@db.internal`, so a database password was counted as an email
+(it is already reported as a database URL with a password). Matches inside a URL's
+`//user:pass@host` part are no longer emails.
+
+Design fix before testing: an unquoted value after `:` would have made "Invalid
+password: user not found" a password hit. Unquoted values count only as `key=value`;
+`:` needs a quoted value (or a number after a quoted JSON key).
+
+Mutation checks, each made a test fail and was restored: mongo (14) — any index field
+instead of the first, text indexes usable, spreads not dynamic, `$or` branches merged,
+nested paths dropped, unique/sparse/partial redundancy, scanning `node_modules`/tests,
+reporting unique/TTL as unused, ignoring the observation time, no URI scrubbing,
+keeping profiler values, never detecting COLLSCAN, a dropped plural rule; log hygiene
+(12) — silent logs passing, ignoring log rotation, reporting masked values, unquoted
+`:` values, no Luhn check, URL credentials as emails, descending into any call,
+flagging literal values, any object as a logger, canary without a disposable
+environment, passing when nothing ran, ignoring the line offset. One mutation (always
+reading the whole log after the canary) is equivalent: the canary is new each run, so
+older lines cannot contain it.
+
+CLI on the repository's fixture backend: `log-hygiene` passed (it only logs its port)
+and `mongo-indexes` was skipped ("No Mongoose models found in 19 source file(s)"), not
+passed.
+
+Shared code changed: `secrets` exports its rules, the route discovery exports its import
+resolver, and the Mongoose discovery exports its source-file walker; selftest, which
+covers `secrets`, passed.
+
+Full results in this Linux sandbox: `test:expanded` 158 tests, 154 passed, 2 skipped
+(k6/MobSF prerequisites), 2 failed only because Firefox and WebKit cannot be installed
+here; selftest, `test:action`, runner (13/13) and API (118/118) passed. The
+registered-check count test changed from 48 to 50 because two checks were added. A
+Windows run of the full suite is still pending.
+
+## Flaky-test detection — 18 November 2026
+
+Engine, API and runner typechecks passed. New `test/flaky-tests.test.ts`: **10 passed**,
+each in a fresh temporary git repository with real JUnit files. Covered: history builds
+up as "skipped, 1 of 5 runs" instead of passing; the same report is not recorded twice;
+fail then pass on the same clean commit is confirmed after two runs; fail then pass
+across an uncommitted edit is not; `flakyFailure` and `flakyError` are confirmed from one
+report; across six commits, a test with four result changes is suspected while a fixed
+regression and an always-failing test are not; window and `minFlips` settings; duplicate
+names (a constant mix is not flaky, a changing one is); 60 retried tests are capped at 50
+findings plus a count, and `maxFlakyTests` adds a blocking finding; sharded reports by
+glob; missing, stale, DTD and empty reports; store paths outside the folder or with the
+wrong extension; damaged, invalid, future-dated and symlinked histories error and are
+left unchanged; runs without git; pruning by `maxRuns`; failure text never stored.
+
+Pre-existing bug found while sharing the JUnit parser: `test-results` recognised
+`flakyFailure` and `rerunFailure` but not `flakyError` (or `rerunError`), so a test that
+errored and then passed on a rerun counted as a plain pass. The shared parser in
+`src/core/junit.ts` recognises all four, and a test asserts `flakyError` in both checks.
+The parser keeps the same safety limits (no DTD/entities, 20 MiB, nesting depth 50) and
+never returns failure text. `observation-history.ts` now exports its lock and atomic
+write so both histories use the same code; the uptime tests still pass.
+
+A test found a weak ordering: findings with equal failure counts were sorted by name, so
+a test with four result changes could appear after one with two. Findings are now
+sorted by kind, then number of changes, then failures.
+
+Mutation checks, each made a test fail and was restored (13): dirty runs counted as the
+same commit, no duplicate-report check, no stale-report check, no "mixed" outcome, passing
+with too little history, no test pruning, no run pruning, ignoring the window, counting
+skipped runs, following a symlinked history, accepting future runs, ignoring
+`maxFlakyTests`, and dropping `flakyError` from the parser.
+
+End-to-end with Node's own JUnit reporter and the CLI: a small git project with a stable
+test, a skipped test and a test whose result alternates. Run 1 was skipped ("1 of the 5
+runs"), and run 2 reported the alternating test as failed and passed on the same commit
+(medium finding, exit 0). With `maxFlakyTests: 0` the run exited 1. Found while doing
+this: `node --test test/` treats the folder as one file, so the documented example uses
+a file pattern, and the reporter does not create a missing report folder (VeriQ then
+errored with "not found" rather than passing).
+
+Correction to the code-quality entry below: its exit code 3 was the fixture's
+unreachable target. Rerun with no target: a new type error exits 1, and removing it
+exits 0.
+
+Full results in this Linux sandbox: `test:expanded` 147 tests, 143 passed, 2 skipped
+(k6/MobSF prerequisites), 2 failed only because Firefox and WebKit cannot be installed
+here; selftest, `test:action`, runner (13/13) and API (118/118) passed. The
+registered-check count test changed from 47 to 48 because a check was added. A Windows
+run of the full suite is still pending.
+
+## Code-quality gate — 18 November 2026
+
+Engine, API and runner typechecks passed. New `test/code-quality.test.ts`: **7 passed**.
+It uses the real TypeScript compiler in a temporary project (linked as the project's own
+`node_modules/typescript`) and a fake ESLint package whose exit code and output are
+controlled. Covered: missing baseline errors; `--baseline` writes hashes only; an
+unchanged run passes; an error moved down two lines is not new; a new error fails and
+only it is listed; a second copy of an accepted message is new; a fixed error is
+counted; `failOn: 'any'`; a missing tsconfig, a project-level tsc error and TypeScript
+not installed all error; ESLint clean/problems/warnings/fatal parse error/exit 2/non-JSON;
+imported ESLint JSON and Dart machine output with an escaped pipe; a saved report older
+than the latest commit; the 30-line listing and 2000-entry report caps; parsers and
+settings validation (both modes at once, `..` and absolute paths, unknown keys).
+
+Root cause found by a test: tool lookup used Node's module resolution, which also
+searches `NODE_PATH` and global folders. On this machine it picked a global TypeScript
+from outside the project, so a project without TypeScript ran a different compiler
+instead of reporting the missing package. Lookup now walks only the project's and its
+parents' `node_modules` folders (workspace hoisting still works), and the test asserts
+the "not installed in the project" error.
+
+Mutation checks, each made a test fail and was restored: line number in the identity,
+set comparison instead of counts, ignoring ESLint exit 2, removing the stale-report
+check, passing without a baseline, counting warnings by default, ignoring project-level
+tsc errors, not unescaping Dart pipes, and failing to find the project's tool.
+
+End-to-end through the CLI on a copy of VeriQ itself: `qa run --only code-quality
+--baseline` accepted one existing error (caused by leaving `apps/` out of the copy);
+adding a type error to `src/core/types.ts` then produced one high finding naming
+`src/core/types.ts:101 TS2322`. (Correction, 18 November: the exit code 3 seen in this
+run came from the fixture config's unreachable target, not from the finding; exit 3
+means an environment error. Rerun with no target: the new error exits 1, and after
+removing it the run exits 0.)
+
+Full results in this Linux sandbox: `test:expanded` 137 tests, 133 passed, 2 skipped
+(k6/MobSF prerequisites), 2 failed only because Firefox and WebKit cannot be installed
+here (`Executable doesn't exist at /opt/pw-browsers/firefox-…`); selftest, `test:action`,
+runner (13/13) and API (118/118) passed. The registered-check count test changed from
+46 to 47 because a check was added. A Windows run of the full suite is still pending.
+
+## Changed-lines coverage — 17 November 2026
+
+Typecheck passed. New `test/diff-coverage.test.ts`: **7 passed** in a temporary git
+repository with a base and a feature commit (modified lines, a new file, a comment-only
+change, a rename with one changed line, a test file and a `.d.ts` file). Covered:
+exact counts and percent, worst-first uncovered ranges, files missing from the report
+(strict and lenient), include/exclude, absolute LCOV paths, stale/empty/malformed/
+foreign reports, a changed file newer than the report, unknown and option-like refs,
+invalid settings, and a repository config that sets `diff.external`, a textconv driver
+and `core.fsmonitor` (none of their programs ran).
+
+Root cause found by a test: a user-supplied `exclude` replaced the default excludes, so
+setting one exclude silently pulled test and type files into scope. Excludes are now
+added to the defaults; `defaultExcludes: false` turns the defaults off, with a test.
+
+Mutation checks: removing `--no-ext-diff`/`--no-textconv`, skipping files missing from
+the report, and removing the stale-report check each made a test fail; the code was
+restored. The registered-check count test changed from 45 to 46 because a check was
+added.
+
+## Readable, privacy-safe evidence and concrete remediation — 16 November 2026
+
+Trigger: a real run against MLITech staging reported unauthenticated
+`GET /report-analytics/customer/export` and `/customer/monthly/export` (HTTP 200).
+The finding was correct, but its evidence printed the raw bytes of the returned Excel
+file (`PK… [Content_Types].xml…`), which was unreadable, and the remediation was the
+generic default.
+
+Root causes:
+
+- The HTTP client decoded every body as UTF-8 text, and evidence printed the first
+  300 characters, so binary bodies came out as raw bytes.
+- A text export (CSV/JSON) would have been printed the same way, putting customer
+  data into reports and onto the dashboard.
+- Only the runner's generic remediation existed for the original checks.
+
+Changes:
+
+- The client keeps the byte size and detects binary bodies from their first bytes
+  (XLSX/DOCX/PPTX/ZIP, PDF, legacy Office, PNG/JPEG/GIF, gzip, binary content types,
+  and mostly-control-character data).
+- `responseEvidence()` describes binary bodies and attachments instead of printing
+  them, and redacts emails, phone, CNIC and card numbers and JWTs in text. Ids,
+  timestamps, dates and amounts stay readable.
+- The runner applies the same sanitising to every plugin's evidence, as a safety net,
+  and caps it at 1000 characters.
+- api-auth findings get a specific fix naming the route's source line, and each of
+  the 17 other original checks gets a default.
+
+Validation in the Linux copy: typechecks (engine, API, runner) passed; new
+`test/evidence.test.ts` 5/5; non-browser expanded files 90 passed, 0 failed, 2
+skipped (k6/MobSF flags); `selftest` all checks passed (every planted bug found, no
+false positives); `test:action` passed; runner 13/13. A mutation check (removing the
+binary branch) made a test fail; the code was restored.
+
+### Intermittent hang in browser checks (found during the same full run)
+
+The full browser suite ran past its 1700 s limit. One client-side redirect test took
+1203 s: a fail-closed case waited for the 20-minute plugin timeout, still produced the
+expected "errored" status, so the test passed while hiding the hang, and the abandoned
+Chromium kept the process from exiting. Running both client-redirect tests in a loop
+reproduced it in 1 of 3 and 1 of 8 runs. Step logs showed `page.close()` sometimes never
+returning after the probe page answered HTTP 500. Playwright's `page.close()` and
+`page.evaluate()` have no timeout of their own.
+
+Fix: `bounded()` (`src/web/browser-options.ts`) limits these waits. Page cleanup gives up
+after 5 s (the browser close at the end closes any leftover page), and browser close
+after 15 s. The marker check after a probe is bounded too. If it times out during the
+`javascript:` probe the result is inconclusive; if it errors because the page navigated
+away, the canary did not run there. Applied in the client-redirect, stored-XSS, form
+CSRF and JSON CSRF checks. The fail-closed test now also asserts the intended error
+reason and a 30 s limit per case, so a hang can no longer pass. Afterwards the loop
+ran clean 10 of 10 times.
+
+A first attempt treated a rejected marker check as "unresponsive" and broke detection
+in all 10 runs; rejection now keeps its earlier meaning (the document is gone).
+
 ## JSON/SPA CSRF and URL/unquoted XSS contexts — 15 November 2026
 
 Engine, API and runner typechecks passed. In the Linux copy (Chromium only):

@@ -30,6 +30,10 @@ export const PERMISSIONS = {
   "notifications.manage": ["owner", "admin"],
   "reports.share": ["owner", "admin"],
   "audit.read": ["owner", "admin"],
+  /** Create UAT releases and criteria, and record test results */
+  "uat.record": ["owner", "admin", "developer"],
+  /** Sign off, reject or reopen a UAT release */
+  "uat.decide": ["owner", "admin"],
 } as const satisfies Record<string, readonly Role[]>;
 export type Permission = keyof typeof PERMISSIONS;
 export const can = (role: Role, p: Permission) => (PERMISSIONS[p] as readonly Role[]).includes(role);
@@ -63,6 +67,13 @@ export const PluginResultUploadSchema = z.object({
   durationMs: z.number().int().nonnegative(),
   findings: z.array(FindingUploadSchema).max(5000),
   stats: z.record(z.string(), z.union([z.number(), z.string()])).optional(),
+  /** Named tests the check ran (API scenarios); UAT criteria show the latest result of their linked scenario. */
+  cases: z.array(z.object({
+    name: z.string().min(1).max(200),
+    status: z.enum(["passed", "failed", "skipped"]),
+    tags: z.array(z.string().min(1).max(50)).max(20).optional(),
+    ms: z.number().int().nonnegative().optional(),
+  })).max(2000).optional(),
 });
 
 export const RUN_TRIGGERS = ["pr", "push", "deploy", "schedule", "manual"] as const;

@@ -124,8 +124,8 @@ export default {
     attacker: "merchantB",
     maxConnectionsPerUser: 3, // MAX_SOCKET_CONNECTIONS_PER_USER in src/helpers/socketHelper.ts
     triggers: [
-      { method: "POST", path: "/api/v1/notification/test", event: "newNotification" },
-      { method: "POST", path: "/api/v1/notification/sales-rep-active-test", event: "salesActivation::*" },
+      { method: "POST", path: "/api/v1/notifications/test", event: "newNotification" },
+      { method: "POST", path: "/api/v1/notifications/sales-rep-active-test", event: "salesActivation::*" },
     ],
   },
 
@@ -163,11 +163,11 @@ export default {
 
   suites: {
     // Every PR: static checks + live checks against a throwaway backend booted in CI
-    pr: ["route-auth", "env-drift", "secrets", "deps", "health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout"],
+    pr: ["route-auth", "env-drift", "secrets", "deps", "health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "scenario-lint", "api-scenarios", "db-checks"],
     // After each staging deploy: live checks against the deployed environment
-    staging: ["health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "web-crawl", "flows"],
+    staging: ["health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "api-scenarios", "web-crawl", "flows"],
     // Nightly: everything, including fuzzing
-    nightly: ["route-auth", "env-drift", "secrets", "deps", "health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "load-smoke", "zap-baseline", "api-fuzz", "web-crawl", "web-a11y", "web-visual", "lighthouse", "flows", "mobile"],
+    nightly: ["route-auth", "env-drift", "secrets", "deps", "health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "load-smoke", "zap-baseline", "api-fuzz", "web-crawl", "web-a11y", "web-visual", "lighthouse", "flows", "mobile", "scenario-lint", "api-scenarios", "db-checks"],
     // Manual runs from a laptop
     local: ["route-auth", "env-drift", "secrets", "deps", "health-cors", "api-auth", "api-smoke", "tenant-isolation", "socket-fanout", "zap-baseline", "web-crawl", "web-a11y"],
   },
@@ -175,6 +175,16 @@ export default {
   gate: { failOn: "high" },
   // Only true on the throwaway CI database (the PR workflow sets QA_ALLOW_MUTATIONS=true)
   allowMutations: false,
+  // Only on a database that is thrown away after the run (the PR workflow sets QA_DISPOSABLE=true).
+  disposable: env("QA_DISPOSABLE") === "true",
+  // Business scenarios (promotions, checkout, sign-up, access). Scenarios that write data run
+  // only where allowMutations and disposable are both on: the PR job's throwaway database.
+  // Database steps read QA_DB_URL (the same throwaway database in the PR job).
+  pluginSettings: {
+    "api-scenarios": { files: "qa-scenarios/*.yaml", database: { type: "mongodb", urlEnv: "QA_DB_URL" } },
+    // Data-integrity rules, read-only; skipped (with that reason) until QA_DB_URL is set.
+    ...(env("QA_DB_URL") ? { "db-checks": { files: "qa-db-checks/*.yaml", database: { type: "mongodb" as const, urlEnv: "QA_DB_URL" } } } : {}),
+  },
   // Accepted findings (the baseline). Commit it; see the qa-agent README, "Adopting on an existing codebase".
   knownIssuesFile: "qa-known-issues.json",
 };

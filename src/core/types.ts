@@ -49,6 +49,12 @@ export interface Finding {
   detail?: string;
   /** Route or file the finding is about; part of the fingerprint */
   target: string;
+  /**
+   * Exact identity of the problem when title + target alone are not unique (for example a
+   * scanner rule matching twice in one file, or two removed parameters of one operation).
+   * Used verbatim in the fingerprint; never shown and not uploaded.
+   */
+  key?: string;
   category: "regression" | "security" | "config" | "performance" | "env" | "quality";
   evidence?: Evidence;
   /** Filled by triage */
@@ -61,6 +67,14 @@ export interface Finding {
   flaky?: boolean;
 }
 
+/** One named test a check ran (an API scenario), for evidence such as UAT criteria. */
+export interface CaseResult {
+  name: string;
+  status: "passed" | "failed" | "skipped";
+  tags?: string[];
+  ms?: number;
+}
+
 export interface PluginResult {
   plugin: string;
   status: "passed" | "failed" | "skipped" | "errored";
@@ -68,6 +82,8 @@ export interface PluginResult {
   durationMs: number;
   findings: Finding[];
   stats?: Record<string, number | string>;
+  /** Named tests the check ran and their outcome (at most 2000). */
+  cases?: CaseResult[];
 }
 
 export interface Logger {
@@ -86,9 +102,15 @@ export interface QaPlugin {
   needs?: Array<"baseUrl" | "accounts" | "backendDir" | "openapi" | "webApps">;
   /** Return a string to skip with that reason, or null to run */
   skipReason?(ctx: import("./context.js").RunContext): string | null;
+  /**
+   * Whether this run of the plugin talks to the target API (decides whether the CLI
+   * health-checks the target first). Default: it declares the baseUrl need, or its layer
+   * is not "static". Set it when the answer depends on settings or differs from the default.
+   */
+  usesTarget?(ctx: import("./context.js").RunContext): boolean;
   /** Only explicitly read-only checks may implement confirmation. Never rerun a write/flow implicitly. */
   confirm?(ctx: import("./context.js").RunContext, finding: Finding): Promise<"confirmed" | "cleared" | "inconclusive">;
-  run(ctx: import("./context.js").RunContext): Promise<Finding[] | { findings: Finding[]; stats?: PluginResult["stats"] }>;
+  run(ctx: import("./context.js").RunContext): Promise<Finding[] | { findings: Finding[]; stats?: PluginResult["stats"]; cases?: CaseResult[] }>;
 }
 
 /** Throw from run() when a plugin finds out only while running that it can't run here (e.g. no device) */

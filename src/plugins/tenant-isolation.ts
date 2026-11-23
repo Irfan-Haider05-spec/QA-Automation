@@ -9,7 +9,7 @@
  * Owner and attacker are two different merchant accounts (two tenants).
  */
 import type { Finding, QaPlugin, RouteInfo } from "../core/types.js";
-import { fillParams, snippet } from "../core/http.js";
+import { fillParams, responseEvidence } from "../core/http.js";
 import { extractIds, keyMatcher, routeKey, where } from "./util.js";
 
 function pairs(routes: RouteInfo[], target: RouteInfo[], extra: Array<{ list: string; detail: string }>, known: Record<string, string>) {
@@ -71,7 +71,7 @@ export const tenantIsolationPlugin: QaPlugin = {
         tally.checked++;
         const req = { method: "GET", path: p, headers: attackerH, tokenLabel: t.attacker };
         const res = await http.send(req);
-        const ev = { ...where(detail), url: res.url, status: res.status, curl: http.curl(req), responseSnippet: snippet(res.text) };
+        const ev = { ...where(detail), url: res.url, status: res.status, curl: http.curl(req), responseSnippet: responseEvidence(res) };
         if (res.status >= 200 && res.status < 300 && res.text.includes(id)) {
           findings.push({
             plugin: this.name, severity: "critical", category: "security", target: routeKey(detail),
@@ -94,7 +94,7 @@ export const tenantIsolationPlugin: QaPlugin = {
               findings.push({
                 plugin: this.name, severity: "critical", category: "security", target: routeKey(patch),
                 title: "Cross-tenant write: another merchant can update this record",
-                evidence: { ...where(patch), url: pres.url, status: pres.status, curl: http.curl(preq), responseSnippet: snippet(pres.text) },
+                evidence: { ...where(patch), url: pres.url, status: pres.status, curl: http.curl(preq), responseSnippet: responseEvidence(pres) },
               });
             }
           }

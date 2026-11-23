@@ -4,7 +4,7 @@ import { chromium, type Page } from 'playwright';
 import type { RunContext } from '../../core/context.js';
 import type { Finding } from '../../core/types.js';
 import { login } from '../../web/crawler.js';
-import { chromiumLaunchOptions } from '../../web/browser-options.js';
+import { bounded, chromiumLaunchOptions } from '../../web/browser-options.js';
 import { issue, localPath } from './support.js';
 import { XSS_CONTEXTS, xssObserved, xssPayloads, type XssContext } from './xss-payloads.js';
 
@@ -46,7 +46,7 @@ export async function checkStoredXss(ctx: RunContext, c: Case): Promise<Finding[
     if (!c.public) {
       const loginPage = await context.newPage(); loginPage.setDefaultTimeout(5000);
       if (await login(loginPage, app, ctx)) throw new Inconclusive('Login failed');
-      await loginPage.close();
+      await bounded(loginPage.close(), 5000);
     }
     let blocked = false, serverError = false;
     await context.route('**/*', route => {
@@ -82,7 +82,7 @@ export async function checkStoredXss(ctx: RunContext, c: Case): Promise<Finding[
         await page.waitForLoadState('load');
         await page.waitForTimeout(100);
         if (serverError) throw new Inconclusive('Submission returned a server error');
-      } finally { await page.close(); }
+      } finally { await bounded(page.close(), 5000); }
     };
     const view = async (until: (page: Page) => Promise<boolean>) => {
       const page = await context.newPage(); page.setDefaultTimeout(5000);
@@ -95,7 +95,7 @@ export async function checkStoredXss(ctx: RunContext, c: Case): Promise<Finding[
         const deadline = Date.now() + c.observeMs;
         do { if (await until(page)) return true; await page.waitForTimeout(25); } while (Date.now() < deadline);
         return false;
-      } finally { await page.close(); }
+      } finally { await bounded(page.close(), 5000); }
     };
     const executed = (page: Page) => xssObserved(page, marker);
 
@@ -123,5 +123,5 @@ export async function checkStoredXss(ctx: RunContext, c: Case): Promise<Finding[
   } catch (error) {
     const why = error instanceof Inconclusive ? error.message : 'browser or page error';
     throw new Error(`Stored XSS probe incomplete during ${phase} (${why}); check login, form, view page and blocked external dependencies`);
-  } finally { await browser.close(); }
+  } finally { await bounded(browser.close(), 15000); }
 }

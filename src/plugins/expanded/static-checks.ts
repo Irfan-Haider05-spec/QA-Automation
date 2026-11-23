@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { z } from "zod";
 import { readDocument, resolveRef, importOpenApi } from "../../discovery/import.js";
 import { SkipError, type Finding, type QaPlugin } from "../../core/types.js";
 import { checkedPlugin, issue, readJson } from "./support.js";
 import { executeProjectTests } from "../../core/external-test.js";
+import { readJUnitFile } from "../../core/junit.js";
 import { inputRestrictions, responseGuarantees, typesIncluded, validateComparisonSchema } from "./contract-schema.js";
 
 export const validationCoverage: QaPlugin = {
@@ -47,7 +47,9 @@ export const apiContract = checkedPlugin("api-contract", "static", "Compare Open
       if (!old) continue;
       const next = resolveRef(head, resolveRef(head, head.paths[p])?.[method]);
       const target = `${method.toUpperCase()} ${p}`;
-      const breaking = (title: string, detail: string) => findings.push(issue("api-contract", title, target, detail, "high", "regression"));
+      // One operation can break in several ways under one title (two new required parameters,
+      // two removed responses); the exact title and detail keep each one a separate finding.
+      const breaking = (title: string, detail: string) => findings.push({ ...issue("api-contract", title, target, detail, "high", "regression"), key: `${title}|${detail}` });
       if (!next) { breaking("API operation removed", "A baseline operation no longer exists."); continue; }
       const oldBody = resolveRef(base, old.requestBody), newBody = resolveRef(head, next.requestBody);
       if (newBody?.required && !oldBody?.required) breaking("Request body became required", "Previously valid requests without a body may fail.");
@@ -104,7 +106,6 @@ export const bundleBudget = checkedPlugin("bundle-budget", "static", "Bounded Ja
     return { findings, stats: { files, bytes, gzipBytes } };
   });
 
-const array = (v: any): any[] => v === undefined ? [] : Array.isArray(v) ? v : [v];
 export const testResults = checkedPlugin("test-results", "static", "Import or explicitly execute local project tests and verify fresh JUnit/coverage results",
   z.object({ junit: z.string(), coverage: z.string().optional(), execution: z.object({ command: z.string().min(1).max(4096), args: z.array(z.string().max(8192)).max(100), timeoutMs: z.number().int().min(100).max(3600000).default(120000) }).strict().optional(), minLinePercent: z.number().min(0).max(100).default(0), baselineLinePercent: z.number().min(0).max(100).optional(), maxDrop: z.number().min(0).max(100).default(0) }).strict(),
   async (ctx, c) => {
@@ -114,25 +115,13 @@ export const testResults = checkedPlugin("test-results", "static", "Import or ex
       c.junit = result.junit; if (c.coverage) c.coverage = result.coverage;
       exitCode = result.exitCode;
     }
-    const file = path.resolve(ctx.configDir, c.junit);
-    if (fs.statSync(file).size > 20 * 1024 * 1024) throw new Error("JUnit report exceeds 20 MiB");
-    const text = fs.readFileSync(file, "utf8");
-    if (/<!DOCTYPE|<!ENTITY/i.test(text)) throw new Error("JUnit DTD/entity declarations are not allowed");
-    if (XMLValidator.validate(text) !== true) throw new Error("Invalid JUnit XML");
-    const doc = new XMLParser({ ignoreAttributes: false, processEntities: false, parseAttributeValue: false }).parse(text);
-    const findings: Finding[] = []; let tests = 0, failures = 0, flaky = 0;
-    const walk = (suite: any, depth = 0) => {
-      if (depth > 50) throw new Error("JUnit nesting too deep");
-      for (const t of array(suite.testcase)) {
-        tests++;
-        const name = `${t["@_classname"] ?? ""} ${t["@_name"] ?? "unnamed"}`.trim();
-        if (t.failure !== undefined || t.error !== undefined) { failures++; findings.push(issue("test-results", "Project test failed", name, "See the original JUnit report; captured output omitted to prevent credential disclosure.", "high", "regression")); }
-        else if (t.flakyFailure !== undefined || t.rerunFailure !== undefined) { flaky++; findings.push({ ...issue("test-results", "Project test passed after retry", name, "JUnit retry history records a transient failure.", "medium", "quality"), flaky: true }); }
-      }
-      for (const child of array(suite.testsuite)) walk(child, depth + 1);
-    };
-    if (doc.testsuites) walk(doc.testsuites);
-    else for (const suite of array(doc.testsuite)) walk(suite);
+    const findings: Finding[] = []; let failures = 0, flaky = 0;
+    const cases = readJUnitFile(path.resolve(ctx.configDir, c.junit));
+    const tests = cases.length;
+    for (const t of cases) {
+      if (t.outcome === "failed") { failures++; findings.push({ ...issue("test-results", "Project test failed", t.name, "See the original JUnit report; captured output omitted to prevent credential disclosure.", "high", "regression"), key: t.name }); }
+      else if (t.retried) { flaky++; findings.push({ ...issue("test-results", "Project test passed after retry", t.name, "JUnit retry history records a transient failure.", "medium", "quality"), key: t.name, flaky: true }); }
+    }
     if (!tests) throw new Error("JUnit report contains no test cases");
     if (exitCode !== 0 && failures === 0) throw new Error("Project test process failed but JUnit reports no failures; refusing a false pass");
     if (c.coverage) {

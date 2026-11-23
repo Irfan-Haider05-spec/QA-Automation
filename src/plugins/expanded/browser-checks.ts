@@ -250,3 +250,6 @@ export const privacyConsent = checkedPlugin("privacy-consent", "web", "Observe c
     }
     return findings;
   }, ["webApps"]);
+
+// Translation-key parity reads files only; RTL pages open the dashboards.
+i18nRtl.usesTarget = (ctx) => ((ctx.config.pluginSettings?.["i18n-rtl"] as { rtlPages?: unknown[] } | undefined)?.rtlPages?.length ?? 0) > 0;

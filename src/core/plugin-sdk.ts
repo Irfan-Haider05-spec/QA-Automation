@@ -9,7 +9,7 @@ export function definePlugin<T>(plugin: QaPlugin & { apiVersion: 1; settingsSche
 
 export const findingSchema = z.object({
   plugin: z.string().min(1), severity: z.enum(["critical", "high", "medium", "low", "info"]),
-  title: z.string().min(1).max(1000), target: z.string().max(2000), detail: z.string().max(20000).optional(),
+  title: z.string().min(1).max(1000), target: z.string().max(2000), key: z.string().min(1).max(1000).optional(), detail: z.string().max(20000).optional(),
   category: z.enum(["regression", "security", "config", "performance", "env", "quality"]),
   evidence: z.object({ url: z.string().optional(), curl: z.string().optional(), status: z.number().optional(),
     responseSnippet: z.string().optional(), file: z.string().optional(), line: z.number().optional(),

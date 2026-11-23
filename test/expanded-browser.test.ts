@@ -396,8 +396,12 @@ test('Client-side redirect probes fail closed on inert controls, errors, HTTP re
   const plugin = EXPANDED_PLUGINS.find(p => p.name === 'web-client-security')!;
   for (const [route, extra] of [['/client-js-inert', {}], ['/client-js-error', {}], ['/client-js-http', {}], ['/client-js-dependency', {}], ['/client-js-control-external', {}], ['/client-js-safe', { public: false }]] as const) {
     const config = { ...base.config, pluginSettings: { 'web-client-security': { clientRedirectCases: [{ ...page(route), queryParam: 'next', safePath: '/client-done', observeMs: 300, ...extra }] } } };
+    const started = Date.now();
     const result = (await runPlugins([plugin], { ...base, config }))[0];
     assert.equal(result.status, 'errored', route);
+    // It must fail closed for its own reason, promptly: a hang that ends in the plugin timeout is a defect.
+    assert.match(result.reason ?? '', /Client-side redirect probe incomplete/, route);
+    assert.ok(Date.now() - started < 30000, `${route} took ${Date.now() - started} ms`);
     const text = JSON.stringify(result);
     assert.ok(!text.includes(CLIENT_REDIRECT_PROBE_HOST) && !text.includes('veriq_nav_') && !text.includes('void(window'), `${route}: no payload in the error`);
   }

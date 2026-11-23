@@ -19,6 +19,8 @@ export interface RunContext {
   selectedPlugins: string[];
   /** Write new visual baselines instead of comparing */
   updateVisual: boolean;
+  /** `qa run --baseline`: checks with their own baselines (code-quality) write them instead of comparing */
+  updateBaseline?: boolean;
   http?: HttpClient;
   auth?: AuthProvider;
   log: Logger;

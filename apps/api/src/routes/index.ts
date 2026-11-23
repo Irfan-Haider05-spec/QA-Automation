@@ -16,6 +16,7 @@ import { ApiKeysRouter } from "../modules/apiKeys/apiKeys.routes.js";
 import { RunsRouter } from "../modules/runs/runs.routes.js";
 import { IssuesRouter } from "../modules/issues/issues.routes.js";
 import { CollaborationRouter } from "../modules/issues/collaboration.routes.js";
+import { UatRouter } from "../modules/uat/uat.routes.js";
 import { AuditRouter } from "../modules/audit/audit.routes.js";
 import { RunnerRouter } from "../modules/runner/runner.routes.js";
 import { DeploymentsRouter } from "../modules/deployments/deployments.routes.js";
@@ -53,6 +54,7 @@ const apiRoutes = [
   { path: "/orgs/:orgId/projects/:projectId/runs", route: RunsRouter },
   { path: "/orgs/:orgId/projects/:projectId/issues", route: IssuesRouter },
   { path: "/orgs/:orgId/projects/:projectId/collaboration", route: CollaborationRouter },
+  { path: "/orgs/:orgId/projects/:projectId/uat", route: UatRouter },
   { path: "/orgs/:orgId/projects/:projectId/deployments", route: DeploymentsRouter },
   { path: "/orgs/:orgId/projects/:projectId/jobs", route: JobsRouter },
   { path: "/orgs/:orgId/projects/:projectId/hosted", route: HostedStatusRouter },

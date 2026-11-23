@@ -313,7 +313,7 @@ docker compose -f docker-compose.supabase.yml ps
 #   caddy    → Up
 
 docker compose -f docker-compose.supabase.yml logs migrate
-#   "8 migration(s) applied" (pehli dafa)
+#   "14 migration(s) applied" (pehli dafa; dobara chalane par "Database is up to date")
 
 docker compose -f docker-compose.supabase.yml logs api | tail -5
 #   "[api] listening on :4100 (pg)"

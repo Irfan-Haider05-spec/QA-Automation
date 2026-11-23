@@ -1,3 +1,5 @@
+// Must stay the first import: it configures Zod before any shared schema is created (CSP without 'unsafe-eval').
+import "@qa/shared/browser";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";

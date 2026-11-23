@@ -57,9 +57,26 @@ async function call<T>(o: PlatformOptions, method: string, p: string, body?: unk
   return json as T;
 }
 
+/** The platform stores shorter text than a local report allows; the full text stays in report.json. */
+const SHORTENED = "\n…[shortened; full text in report.json]";
+const clip = (value: string | undefined, max: number) =>
+  value === undefined || value.length <= max ? value : value.slice(0, max - SHORTENED.length) + SHORTENED;
+
+/** Findings in the platform's upload shape: text within its limits, engine-only fields removed. */
+export function uploadResults(summary: RunSummary) {
+  return summary.results.map((r) => ({
+    ...r,
+    reason: clip(r.reason, 2000),
+    findings: r.findings.map(({ key: _key, ...f }) => ({
+      ...f, title: clip(f.title, 500)!, target: clip(f.target, 500)!, detail: clip(f.detail, 5000), remediation: clip(f.remediation, 5000),
+    })),
+  }));
+}
+
 export async function uploadRun(summary: RunSummary, o: UploadOptions): Promise<UploadResult> {
   const r = await call<UploadResult>(o, "POST", "/runner/runs", {
     ...summary,
+    results: uploadResults(summary),
     target: summary.target ?? undefined,
     environmentId: o.environmentId,
     source: o.source ?? (process.env.GITHUB_ACTIONS === "true" ? "ci" : "cli"),

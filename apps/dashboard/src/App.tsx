@@ -22,6 +22,7 @@ import { ApiKeysTab } from "./pages/project/ApiKeysTab";
 import { ProjectSettingsTab } from "./pages/project/ProjectSettings";
 import { CiTab } from "./pages/project/CiTab";
 import { SchedulesTab } from "./pages/project/SchedulesTab";
+import { UatTab, UatReleasePage } from "./pages/project/UatTab";
 import { ClientsPage } from "./pages/Clients";
 import { MembersPage } from "./pages/Members";
 import { AuditPage } from "./pages/Audit";
@@ -77,6 +78,8 @@ export function App() {
           <Route path="api-keys" element={<ApiKeysTab />} />
           <Route path="ci" element={<CiTab />} />
           <Route path="schedules" element={<SchedulesTab />} />
+          <Route path="uat" element={<UatTab />} />
+          <Route path="uat/:releaseId" element={<UatReleasePage />} />
           <Route path="settings" element={<ProjectSettingsTab />} />
         </Route>
         <Route path="clients" element={<ClientsPage />} />

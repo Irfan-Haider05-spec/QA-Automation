@@ -90,8 +90,8 @@ async function run(name: string, value: unknown, active = false) {
 }
 function write(file: string, value: unknown) { fs.writeFileSync(path.join(dir, file), typeof value === "string" ? value : JSON.stringify(value)); return file; }
 
-test("45 distinct plugins; every configured adapter skips with an honest prerequisite", async () => {
-  assert.equal(PLUGINS.length, 45); assert.equal(new Set(PLUGINS.map((p) => p.name)).size, 45);
+test("54 distinct plugins; every configured adapter skips with an honest prerequisite", async () => {
+  assert.equal(PLUGINS.length, 54); assert.equal(new Set(PLUGINS.map((p) => p.name)).size, 54);
   for (const plugin of EXPANDED_PLUGINS.filter((p) => p.skipReason)) assert.match(plugin.skipReason!(context())!, /Configure/);
 });
 test("HTTP: mutations are not retried after an ambiguous connection failure", async () => {

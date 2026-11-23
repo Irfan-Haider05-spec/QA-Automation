@@ -314,11 +314,155 @@ explicit, bounded workflows. They are not exhaustive vulnerability detection.
 - Chunk 3: real MobSF acceptance fails honestly (no server, APK/IPA or API key
   available). Other tools were accepted on the Windows machine as recorded in
   VALIDATION.md.
-- Chunk 6 (acceptance against the user's real project and disposable staging): not
-  started; it needs target configuration and access.
+- Chunk 6 (acceptance against the user's real project and disposable staging): the
+  static part (Chunk 6a) and a live run against the real backend on a throwaway local
+  MongoDB (Chunk 6b) are done; the run against the team's deployed staging still needs
+  its URL and QA accounts.
 
 So the core is not 100% complete: chunks 2, 3 (MobSF) and 6 still need external
 resources or a person.
 
 Chunks 4–6 have not been completed. Do not interpret these delivery slices as
 100% core readiness.
+
+## Chunk 7a: changed-lines (diff) coverage
+
+Added `diff-coverage` (registered checks: 46). It combines the project's LCOV report
+with `git diff base...HEAD` and measures coverage of the executable lines the change
+adds or modifies, with a configurable minimum. Missing files are reported, stale or
+empty reports and unknown refs error, and git cannot be made to run repository-defined
+programs. Next candidates in this chunk: a code-quality gate (project typecheck and
+ESLint, new errors only), flaky-test detection from JUnit history, a MongoDB
+index/query check and log hygiene.
+
+## Chunk 7b: code-quality gate
+
+Added `code-quality` (registered checks: 47). It runs the project's own `tsc --noEmit`,
+ESLint and Dart analyzer (or imports their saved output) and fails only on diagnostics
+that are new compared with a committed baseline written by `qa run --baseline`.
+Diagnostics are compared by tool, file, rule and message with counts, so moved code is
+not reported and duplicates are. A missing baseline, a tool that could not really run,
+and stale imported reports error instead of passing. Tools come from the project's own
+`node_modules`, never a global copy.
+
+## Chunk 7c: flaky-test detection
+
+Added `flaky-tests` (registered checks: 48). Each run records the project's JUnit
+results in a bounded local history keyed by the tested commit. Tests are reported when
+they failed and passed on the same clean commit, passed only after a retry, or keep
+changing result across recent runs (suspected). Too little history is reported as
+skipped with progress, never as passed; stale or repeated reports are not recorded.
+JUnit parsing is now shared with `test-results`, which also fixed `flakyError` being
+counted as a plain pass.
+
+## Chunk 7d: MongoDB indexes and log hygiene
+
+Added `mongo-indexes` and `log-hygiene` (registered checks: 50).
+
+`mongo-indexes` reads Mongoose models, declared indexes and the queries in the backend
+source and reports query shapes no index can serve, plus duplicate and redundant
+indexes. Its discovery was compared with real Mongoose 8.24.10 on the test models
+(same indexes, options and collection names). Optional live checks use a read-only
+connection for real indexes, query plans, unused indexes and profiler scans. The live
+part has not been run against a real MongoDB server yet (none is available in this
+sandbox); that acceptance is an open validation gap.
+
+`log-hygiene` reports logging calls that write request bodies, headers or secrets,
+scans log files for credentials and personal data without reporting values, and, in a
+disposable environment, proves leaks with a canary value searched only in new log lines.
+
+This completes the candidates listed for chunk 7. The core is still not 100% complete:
+chunks 2 (a person's native recording session), 3 (MobSF) and 6 (real-project
+acceptance) need external resources or a person, and the live MongoDB acceptance above
+is open.
+
+## Functionality audit (18 November 2026)
+
+A full audit fixed eight functional problems (details in VALIDATION.md): static-only
+runs failing when the API was down, route discovery blocking checks that do not read
+routes, CLI crashes on synchronous command errors, silent results for a mistyped uptime
+file and an invalid wait timeout, a browser error on every dashboard page under the
+production CSP, `.tsx`/`.jsx` files skipped by the source scanners, `load-stress`
+erroring instead of skipping without a target, and a `::add-mask::` false positive. The
+open items listed above are unchanged.
+
+## Chunk 8a: API scenarios (advanced functional API testing)
+
+Added `api-scenarios` (registered checks: 51): multi-step functional API tests written in
+YAML/JSON with chained requests, value, schema and snapshot assertions, cleanup, and
+tags for smoke, regression and UAT sets, producing JSON and JUnit reports. A starter
+file is in `examples/api-scenarios.yaml`.
+
+## Chunk 8b: database testing
+
+Added `db-checks` (read-only data-integrity rules with expected counts on MongoDB,
+PostgreSQL or MySQL/MariaDB) and database steps in API scenarios (check what an API call
+stored, and use stored values in later steps). SQL runs as one validated SELECT inside a
+READ ONLY transaction with a server time limit; MongoDB refuses write stages and
+server-side JavaScript. Validated against real PostgreSQL 16 and MariaDB 10.11 servers
+and embedded PostgreSQL; MongoDB acceptance is still open (no server available here).
+
+## Chunk 8c: injection probes
+
+Added `injection-probes`: NoSQL operator injection and SQL injection (boolean, error,
+optional time delay) on listed inputs, each judged against a control request and
+repeated, in disposable environments only, with no stacked or data-changing statements.
+
+## Chunk 8d: UAT sign-off
+
+Added user acceptance testing to the platform (migration `015_uat.sql`, API under
+`/projects/:projectId/uat`, dashboard tab "Acceptance"): releases with acceptance
+criteria, recorded results with notes and evidence runs, sign-off only when every
+criterion passed, rejection with a reason, a lock until reopened, audit events, and a
+Markdown/JSON report. Permissions `uat.record` (owner, admin, developer) and
+`uat.decide` (owner, admin).
+
+With chunks 8a-8d, functional, regression, smoke, UAT, API and database testing are all
+covered by automated checks. The core is still not 100% complete: chunks 2, 3 and 6 and
+the live MongoDB acceptance need external resources or a person.
+
+## Chunk 6a: real-project acceptance, static part (MLITech backend)
+
+The checks that read source and configuration were run against the public MLITech backend
+repository (commit `ac766c4`): route discovery, route-auth, env-drift, secrets, deps,
+validation-coverage, code-quality, mongo-indexes, log-hygiene and Semgrep. Every verified
+finding was a real problem (no false positives found), including four critical routes
+without authentication. The run exposed four VeriQ defects, all fixed with tests (details in
+VALIDATION.md): findings with a shared fingerprint were silently dropped (14 of 33 index
+findings, 10 of 20 Semgrep matches), pull-request scanner runs filtered out every match,
+long findings could make a platform upload fail, and `health-cors` could not detect loose
+origin checks.
+
+Chunk 6 is not complete: the live part (API authorization, tenant isolation, CORS, sockets,
+dashboards and flows against a running deployment with QA accounts) still needs staging
+access, and the live MongoDB analysis still needs a database. The core is therefore still
+not 100% complete: chunks 2, 3 (MobSF) and the live part of 6 remain.
+
+## Chunk 6b: live acceptance on a throwaway MongoDB (MLITech backend)
+
+The MLITech backend (commit `ac766c4`) was built and run locally, two instances sharing
+Redis, on MongoDB 8.3.7 started as a single-node replica set from the conda-forge package
+(a package registry; no Docker image could be pulled). VeriQ's CI seed created the QA
+accounts, exactly as the PR workflow in `integrations/mlitech/qa.yml` does. The PR suite
+(539 requests), the MLITech business scenarios, injection probes and live index analysis
+ran against it. Every scenario failure was checked against the backend's code; all are
+real behaviour of this commit (details and the list in VALIDATION.md). The live MongoDB
+acceptance gap is closed: `test/mongo-live.test.ts` runs db-checks, scenario database
+steps and mongo-indexes live mode against the real server.
+
+## Chunk 8e: testing levels (scenario lint, Newman, UAT evidence)
+
+- `scenario-lint` (plugin 54, static): scenario files are checked against the discovered
+  routes in every PR, without a target.
+- Newman (Postman) JUnit: repeated assertion names in different requests stay separate
+  tests in `test-results` and `flaky-tests`.
+- UAT: scenario outcomes are uploaded with each run (migration `016_run_cases.sql`); a
+  criterion linked to a scenario shows its latest result and can attach that run as
+  evidence; the criterion form suggests scenario names.
+- `mongo-indexes`: indexes MongoDB can never build (unsupported `partialFilterExpression`
+  operators) and declared indexes missing from the live database.
+
+Still open for the core: Chunk 2 (a recorder session with a person), Chunk 3 (MobSF:
+server, APK and key unavailable), the run against the deployed staging, and a full run on
+Windows. The core is not claimed 100% complete.
+

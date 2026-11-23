@@ -1,0 +1,91 @@
+# VeriQ API scenarios: a starter file.
+# Copy it (for example to qa-scenarios/promotions.yaml), change the paths and fields to
+# your API, and enable it in qa.config.ts:
+#   pluginSettings: { "api-scenarios": { files: "qa-scenarios/*.yaml" } }
+# Run:   npx qa run --only api-scenarios
+# Smoke: QA_SCENARIO_TAGS=smoke npx qa run --only api-scenarios
+# Accounts (merchantA, merchantB, customer, admin) are the QA accounts from qa.config.ts.
+# Set QA_MERCHANT_A_OBJECT_ID to merchant A's _id for the ownership check below.
+# Inside { } or [ ], put JSON paths that contain [ ] in quotes: "$.data[0]._id".
+version: 1
+scenarios:
+  # Read-only: safe on any environment.
+  - name: Merchant sees only their own promotions
+    tags: [smoke, regression]
+    account: merchantA
+    steps:
+      - name: list
+        request: { method: GET, path: /api/v1/promotion }
+        expect:
+          status: 200
+          maxMs: 2000
+          json:
+            - { path: $.success, equals: true }
+            - { path: $.data, type: array }
+            - { path: $.data, every: [{ path: $.merchantId, equals: "{{env.QA_MERCHANT_A_OBJECT_ID}}" }] }
+          schema:
+            type: object
+            required: [success, data]
+            properties:
+              data:
+                type: array
+                items:
+                  type: object
+                  required: [_id, title]
+                  properties: { _id: { type: string, format: objectid }, title: { type: string, minLength: 1 } }
+
+  - name: Anonymous requests are rejected
+    tags: [smoke, security]
+    steps:
+      - request: { method: GET, path: /api/v1/promotion }
+        expect: { status: 401 }
+
+  # Tenant isolation: another merchant must not read this merchant's record.
+  - name: Merchant B cannot open merchant A's promotion
+    tags: [regression, security]
+    severity: critical
+    steps:
+      - account: merchantA
+        request: { method: GET, path: /api/v1/promotion }
+        expect: { json: [{ path: $.data, minLength: 1 }] }
+        save: { promoId: "$.data[0]._id" }
+      - account: merchantB
+        request: { method: GET, path: "/api/v1/promotion/{{promoId}}" }
+        expect: { status: [403, 404] }
+
+  # Writes data: runs only with allowMutations and disposable (a throwaway database).
+  - name: Merchant creates, reads, updates and deletes a promotion
+    tags: [regression, uat]
+    account: merchantA
+    vars: { title: "QA promo {{unique}}" }
+    steps:
+      - name: create
+        request: { method: POST, path: /api/v1/promotion, json: { title: "{{title}}", discount: 15 } }
+        expect:
+          status: 201
+          json:
+            - { path: $.data.title, equals: "{{title}}" }
+            - { path: $.data.discount, equals: 15 }
+        save: { promoId: $.data._id }
+      - name: read back
+        request: { method: GET, path: "/api/v1/promotion/{{promoId}}" }
+        expect:
+          status: 200
+          json: [{ path: $.data.title, equals: "{{title}}" }]
+          # Approve the response once with: npx qa run --only api-scenarios --baseline
+          snapshot: { ignore: [$.data._id, $.data.title, $.data.createdAt, $.data.updatedAt] }
+      - name: update
+        request: { method: PATCH, path: "/api/v1/promotion/{{promoId}}", json: { discount: 20 } }
+        expect: { status: 200, json: [{ path: $.data.discount, equals: 20 }] }
+    cleanup:
+      - request: { method: DELETE, path: "/api/v1/promotion/{{promoId}}" }
+        expect: { status: [200, 204, 404] }
+
+  - name: Invalid promotion is rejected with a clear error
+    tags: [regression]
+    account: merchantA
+    steps:
+      - request: { method: POST, path: /api/v1/promotion, json: { title: "x", discount: 500 } }
+        expect:
+          status: 400
+          json: [{ path: $.success, equals: false }, { path: $.message, type: string }]

@@ -5,7 +5,7 @@
  * response envelopes. 4xx is accepted (a route may need query params).
  */
 import type { Finding, QaPlugin } from "../core/types.js";
-import { snippet } from "../core/http.js";
+import { responseEvidence } from "../core/http.js";
 import { routeKey, where, isNotMountedResponse } from "./util.js";
 import { fillParams } from "../core/http.js";
 
@@ -48,7 +48,7 @@ export const apiSmokePlugin: QaPlugin = {
       const req = { method: "GET", path, headers, tokenLabel: label };
       const res = await http.send(req);
       if (isNotMountedResponse(res.status, res.text)) continue;
-      const ev = { ...where(r), url: res.url, status: res.status, curl: http.curl(req), responseSnippet: snippet(res.text) };
+      const ev = { ...where(r), url: res.url, status: res.status, curl: http.curl(req), responseSnippet: responseEvidence(res) };
       if (res.networkError) {
         findings.push({ plugin: this.name, severity: "high", category: "regression", target: routeKey(r), title: `No response: ${res.networkError}`, evidence: ev });
         continue;

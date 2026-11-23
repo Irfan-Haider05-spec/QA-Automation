@@ -4,15 +4,15 @@ VeriQ combines a deterministic QA engine, a multi-tenant API, a React dashboard,
 and a hosted job runner. It tests APIs and web apps, imports scanner/test reports,
 tracks findings across runs, and gives CI a quality gate. AI is disabled.
 
-**Current implementation:** 45 plugins (18 original + 27 additions), OpenAPI/Postman
+**Current implementation:** 54 plugins (18 original + 36 additions), OpenAPI/Postman
 imports, multiple CLI authentication strategies, a versioned local plugin SDK,
 private S3-compatible evidence storage, platform MFA/OIDC, configurable plan quotas,
-hosted evidence, issue discussions/snapshot delivery, trends/exports, and the
+hosted evidence, issue discussions/snapshot delivery, trends/exports, UAT sign-off, and the
 supplied VeriQ green/navy branding. External integrations are optional and disabled
 until configured; prices and deployment remain deferred.
 Some checks wrap external report formats; registration alone is not test coverage.
 
-- [Run and configure the 26 additions](docs/PLUGINS.md)
+- [Run and configure the 36 additions](docs/PLUGINS.md)
 - [Architecture and delivery status](docs/ARCHITECTURE.md)
 - [Validation results and root-cause fixes](docs/VALIDATION.md)
 - [Implementation plan](docs/IMPLEMENTATION-PLAN.md)
@@ -45,7 +45,7 @@ discover routes (TS AST) → select by git diff → run plugins → triage → r
 | `env-drift` | static | Env vars the code reads but `.env.example` doesn't document, and likely name mismatches (`DATABASE_URL` vs `MONGODB_URI`) |
 | `secrets` | static | Committed `.env` files and hard-coded keys (built-in rules plus `gitleaks` when installed) |
 | `deps` | static | `npm audit` on the backend lockfile |
-| `health-cors` | live | Health check, security headers, CORS rejects unknown origins and allows the dashboards |
+| `health-cors` | live | Health check, security headers, CORS rejects unknown origins and allows the dashboards; look-alike origins (`startsWith`/`endsWith`/`includes` checks), the `http://` version of an HTTPS dashboard and the `null` origin must be rejected too |
 | `api-auth` | live | Every protected route returns 401 without a token or with a bad token, and 403 for a disallowed role. Confirms unprotected routes live |
 | `api-smoke` | live | Every parameter-free GET with the right role: no 5xx, not slow |
 | `tenant-isolation` | live | Merchant B cannot read (or, on the CI database, edit) merchant A's records |
@@ -83,6 +83,9 @@ Useful flags:
 | `--upload` | Send the run to the QA platform (`QA_PLATFORM_URL`, `QA_PLATFORM_API_KEY`, optional `QA_PLATFORM_ENV` or `--platform-env`) |
 
 Exit codes: `0` gate passed · `1` gate failed · `2` config or usage error · `3` target unreachable.
+The target is health-checked only when a selected check that will run talks to it, so a
+static-only run (for example `--only secrets,code-quality`) is not failed by an unreachable
+API. Likewise, route discovery problems stop a run only when a selected check reads routes.
 
 Login body: by default the agent posts `{ identifier, password, device }` to `login.path`.
 For other APIs set `login.bodyTemplate`, e.g. `{ email: "{{identifier}}", password: "{{password}}" }`.
@@ -136,6 +139,17 @@ message history with retries. **Reports** (organization → Reports): pass rate,
 day, open/fixed/returned issues for a client or a project over any period; download as
 PDF (print layout), export issues as CSV, or send the client an expiring share link that
 opens without an account and contains no request details.
+
+**Acceptance (UAT)** (project → Acceptance): a release is a list of acceptance criteria
+(a user story or rule, optional Given/When/Then steps, a linked scenario and a run as
+evidence). Owners, admins and developers record each result (passed, failed with a note,
+blocked with a note); viewers can read. An owner or admin signs the release off only
+when every criterion passed, or rejects it with a reason; the decision is recorded with
+their name and time and locks the release until it is reopened with a reason. Every
+change is in the audit log, and the report downloads as Markdown (or JSON from the API).
+A criterion linked to an API scenario shows the scenario's latest uploaded result with a
+link to its run; one click attaches that run as evidence. The criterion form suggests the
+scenario names from recent runs.
 
 ## Running the platform on a server
 
@@ -227,7 +241,11 @@ git add known-issues.json && git commit -m "QA baseline"
 ```
 
 Every finding gets a stable fingerprint (plugin + normalised title + route), so the
-same bug keeps its fingerprint across runs. Baselined issues still appear in reports,
+same bug keeps its fingerprint across runs. Where one route or file can have several
+different problems with the same title (two Semgrep matches in one file, two query
+shapes of one model, two parameterised tests), the plugin adds the exact identity, so
+each stays its own finding. Findings that still share a fingerprint are never dropped
+silently: the report lists them under the first one, which keeps the worst severity. Baselined issues still appear in reports,
 marked **known**, but don't fail the gate. Remove an entry when it is fixed, or add
 `"until": "2026-12-31"` to make an accepted issue block again after a date.
 
@@ -261,6 +279,13 @@ Fix the critical findings before you baseline. Don't baseline them.
 - The fuzzer skips `/auth/`, logout, delete, webhooks and payment callbacks.
 - `seed/seed-ci.ts` refuses to run against any non-local MongoDB host.
 - Tokens are redacted in every report (`Bearer $QA_TOKEN_MERCHANTB`).
+- Response evidence never prints binary bodies or file downloads: an Excel, PDF or
+  ZIP export is shown as `[Binary response not shown: Excel workbook (.xlsx), 18.3 KB…]`
+  and a download as `[File download not shown: <name>, <size>…]`. Text evidence is capped
+  and has emails, phone numbers, CNIC/card numbers and JWTs replaced (`<email>`, `<phone>`…),
+  for every plugin. Use the finding's curl command to fetch the real response.
+- Each finding carries a concrete next step (`remediation`): api-auth names the route's
+  source line; the original checks have a per-check default.
 - The dashboard crawler only follows links; it never clicks buttons or submits
   forms after login, and skips logout/delete paths.
 
@@ -273,6 +298,10 @@ Fix the critical findings before you baseline. Don't baseline them.
 
 `ctx` gives you the discovered routes, the routes selected for this run, a throttled
 HTTP client (`ctx.http`), logged-in tokens per account (`ctx.auth`) and the config.
+
+Declare what the plugin really uses: `needs: ["baseUrl"]` when it calls the API (the CLI
+then health-checks the target first). A `static` plugin that calls the API only for some
+settings sets `usesTarget(ctx)`; a non-static plugin that never calls it returns `false`.
 
 ## Self-test
 

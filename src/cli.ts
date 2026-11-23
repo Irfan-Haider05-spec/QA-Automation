@@ -37,7 +37,7 @@ import { loadConfig } from "./core/config.js";
 import { makeLogger, type RunContext } from "./core/context.js";
 import { HttpClient } from "./core/http.js";
 import { AuthProvider } from "./core/auth.js";
-import { runPlugins } from "./core/runner.js";
+import { runPlugins, targetNeeded } from "./core/runner.js";
 import { exportUptimeHistory, resolveStorePath } from "./core/observation-history.js";
 import { gate, loadKnownIssues, triage, writeBaseline } from "./core/triage.js";
 import { writeReports, type RunSummary } from "./core/report.js";
@@ -116,7 +116,7 @@ async function platformAccounts() {
   return accounts;
 }
 
-async function setup(withDiscovery = true) {
+async function setup(withDiscovery = true, tolerateDiscoveryError = false) {
   const { config, configDir, fromPlatform } = await loadConfig(opt.config!, {
     baseUrl: opt["base-url"] ?? process.env.QA_BASE_URL,
     backendDir: opt["backend-dir"] ?? process.env.QA_BACKEND_DIR,
@@ -141,9 +141,15 @@ async function setup(withDiscovery = true) {
     return { config, configDir, outDir, routes: [], fromSource: false };
   }
   if (!fs.existsSync(config.backend.dir)) throw new Error(`Backend dir not found: ${config.backend.dir} (set QA_BACKEND_DIR)`);
-  const discovery = withDiscovery ? discoverRoutes({ backendDir: config.backend.dir, routesIndex: config.backend.routesIndex, apiPrefix: config.backend.apiPrefix, appFile: config.backend.appFile }) : { routes: [], warnings: [] };
+  let discovery: ReturnType<typeof discoverRoutes>;
+  try {
+    discovery = withDiscovery ? discoverRoutes({ backendDir: config.backend.dir, routesIndex: config.backend.routesIndex, apiPrefix: config.backend.apiPrefix, appFile: config.backend.appFile }) : { routes: [], warnings: [] };
+  } catch (e) {
+    if (!tolerateDiscoveryError) throw e;
+    return { config, configDir, outDir, routes: [], fromSource: false, discoveryError: (e as Error).message };
+  }
   for (const w of discovery.warnings) log.warn(w);
-  return { config, configDir, outDir, routes: discovery.routes, fromSource: withDiscovery };
+  return { config, configDir, outDir, routes: discovery.routes, fromSource: withDiscovery, discoveryError: undefined as string | undefined };
 }
 
 async function cmdDiscover() {
@@ -164,7 +170,7 @@ async function cmdDiscover() {
 async function cmdRun() {
   const started = Date.now();
   const suite = opt.suite as Suite;
-  const { config, configDir, outDir, routes, fromSource } = await setup();
+  const { config, configDir, outDir, routes, fromSource, discoveryError } = await setup(true, true);
   config.pluginSettings ??= {};
   const registry = await loadPlugins(PLUGINS, config.plugins ?? [], configDir, config.pluginSettings);
 
@@ -173,6 +179,12 @@ async function cmdRun() {
   const unknown = names.filter((n) => !registry.has(n));
   if (unknown.length) throw new Error(`Unknown plugin(s): ${unknown.join(", ")}. Run "qa plugins".`);
   const plugins = names.map((n) => registry.get(n)!);
+  // Route discovery only matters to checks that read routes (live checks, OpenAPI users, route-auth, validation-coverage).
+  if (discoveryError) {
+    const readsRoutes = plugins.filter((p) => p.layer !== "static" || p.needs?.includes("openapi") || ["route-auth", "validation-coverage"].includes(p.name));
+    if (readsRoutes.length) throw new Error(discoveryError);
+    log.warn(`Route discovery failed (${discoveryError}); the selected checks do not read routes, so the run continues`);
+  }
 
   // Route selection from the git diff
   let targetRoutes = routes;
@@ -198,13 +210,14 @@ async function cmdRun() {
     }
   }
 
-  const ctx: RunContext = { suite, config, configDir, outDir, routes, targetRoutes, changedFiles: files, openapiPath, log, selectedPlugins: names, updateVisual: !!opt["update-visual"] };
+  const ctx: RunContext = { suite, config, configDir, outDir, routes, targetRoutes, changedFiles: files, openapiPath, log, selectedPlugins: names, updateVisual: !!opt["update-visual"], updateBaseline: !!opt.baseline };
   let envError: string | undefined;
   if (config.target.baseUrl) {
     ctx.http = new HttpClient(config.target.baseUrl, config.target.requestsPerMinute, config.target.timeoutMs);
     ctx.auth = new AuthProvider(config, ctx.http);
-    const ping = await ctx.http.send({ method: "GET", path: config.backend.healthPath });
-    if (ping.networkError || ping.status >= 500) {
+    const ping = targetNeeded(plugins, ctx) ? await ctx.http.send({ method: "GET", path: config.backend.healthPath }) : undefined;
+    if (!ping) log.info("No selected check uses the target API; its health check is skipped");
+    else if (ping.networkError || ping.status >= 500) {
       envError = `${config.target.baseUrl}${config.backend.healthPath} → ${ping.networkError ?? `HTTP ${ping.status}`}`;
       log.warn(`Target unhealthy, live plugins skipped: ${envError}`);
       delete ctx.http; delete ctx.auth;
@@ -298,6 +311,7 @@ async function github(summary: RunSummary, o: { backendDir: string; outDir: stri
 async function cmdWaitFor() {
   const base = (opt.url ?? process.env.QA_BASE_URL ?? "").replace(/\/+$/, "");
   if (!base) throw new Error("--url (or QA_BASE_URL) is required");
+  if (!/^\d{1,6}$/.test(String(opt.timeout)) || Number(opt.timeout) < 1) throw new Error("--timeout must be a whole number of seconds (1 or more)");
   const deadline = Date.now() + Number(opt.timeout) * 1000;
   const startedAt = Date.now();
   log.info(`Waiting for ${base}${opt.path}${opt.fresh ? " (fresh deploy)" : ""}, up to ${opt.timeout}s`);
@@ -391,6 +405,8 @@ async function cmdRecord() {
 function cmdUptimeExport() {
   if (!opt.file) throw new Error("uptime-export requires --file <history.jsonl>");
   const file = resolveStorePath(process.cwd(), opt.file);
+  // A mistyped path must not look like an empty history.
+  if (!fs.existsSync(file)) throw new Error(`Uptime history ${opt.file} not found (paths are relative to the current folder)`);
   if (opt.limit !== undefined && !/^\d{1,4}$/.test(opt.limit)) throw new Error("--limit must be an integer from 1 to 1000");
   const page = exportUptimeHistory(file, { from: opt.from, to: opt.to, target: opt.target, outcome: opt.outcome as never, cursor: opt.cursor, limit: opt.limit === undefined ? 100 : Number(opt.limit) });
   process.stdout.write(JSON.stringify(page, null, 2) + "\n");
@@ -403,7 +419,9 @@ if (!fn) {
   console.error(`Unknown command "${cmd}". Try: qa help`);
   process.exit(2);
 }
-Promise.resolve(fn())
+// .then(fn) also turns errors thrown by synchronous commands into the "qa: message" exit 2 path.
+Promise.resolve()
+  .then(fn)
   .then((code) => process.exit(code))
   .catch((e) => {
     console.error(`qa: ${e?.message ?? e}`);

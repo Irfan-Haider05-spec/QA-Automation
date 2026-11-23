@@ -8,8 +8,23 @@
  * when allowMutations is on (throwaway CI database).
  */
 import type { Finding, QaPlugin, RouteInfo } from "../core/types.js";
-import { fillParams, snippet } from "../core/http.js";
+import { fillParams, responseEvidence } from "../core/http.js";
 import { isNotMountedResponse, keyMatcher, routeKey, where } from "./util.js";
+
+/** A concrete fix for each api-auth finding, pointing at the route's source line. */
+export function remediationFor(title: string, r: RouteInfo): string {
+  const at = r.source?.file ? ` (${r.source.file}${r.source.line ? `:${r.source.line}` : ""})` : "";
+  const key = routeKey(r);
+  if (title.startsWith("Confirmed live")) {
+    return `Add the authentication middleware, with the roles allowed to use it, to ${key}${at}. If the route is meant to be public, add "${key}" to publicRoutes in qa.config.ts. Exports, reports and admin data should never be public.`;
+  }
+  if (title.startsWith("Auth bypass: protected route")) return `The route declares authentication but answered without a token. Check that the auth middleware runs first and rejects a missing token with 401${at}.`;
+  if (title.startsWith("Auth bypass: route accepts a malformed JWT")) return `Verify the token signature and expiry before trusting it; reject malformed tokens with 401${at}.`;
+  if (title.startsWith("Role bypass")) return `Restrict the route to its allowed roles in the auth middleware and check the role on the server, not only in the UI${at}.`;
+  if (title.startsWith("Server error")) return `Run the auth middleware before validation and handlers, so rejected requests get 401/403 instead of a 500${at}.`;
+  if (title.startsWith("Expected 40")) return `Put the auth middleware before request validation, so anonymous or disallowed callers learn nothing about the payload${at}.`;
+  return "Review the evidence, correct the reported behavior, and rerun the same check.";
+}
 
 export const apiAuthPlugin: QaPlugin = {
   name: "api-auth",
@@ -25,7 +40,7 @@ export const apiAuthPlugin: QaPlugin = {
     let checks = 0;
 
     const report = (r: RouteInfo, req: Parameters<typeof http.send>[0], res: Awaited<ReturnType<typeof http.send>>, f: Omit<Finding, "plugin" | "target" | "evidence">) =>
-      findings.push({ plugin: this.name, target: routeKey(r), ...f, evidence: { ...where(r), url: res.url, status: res.status, curl: http.curl(req), responseSnippet: snippet(res.text) } });
+      findings.push({ plugin: this.name, target: routeKey(r), remediation: remediationFor(f.title, r), ...f, evidence: { ...where(r), url: res.url, status: res.status, curl: http.curl(req), responseSnippet: responseEvidence(res) } });
 
     for (const r of ctx.targetRoutes) {
       if (r.module === "app") continue;

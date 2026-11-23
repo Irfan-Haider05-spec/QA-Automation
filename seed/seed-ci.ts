@@ -61,7 +61,8 @@ async function main() {
 
   const a = await upsertUser(need("QA_MERCHANT_A_ID"), need("QA_MERCHANT_A_PASS"), { firstName: "QA Merchant A", businessName: "QA Shop A", role: "MERCHANT", merchantId: null, subscription: "active", paymentStatus: "paid", approveStatus: "approved" });
   const b = await upsertUser(need("QA_MERCHANT_B_ID"), need("QA_MERCHANT_B_PASS"), { firstName: "QA Merchant B", businessName: "QA Shop B", role: "MERCHANT", merchantId: null, subscription: "active", paymentStatus: "paid", approveStatus: "approved" });
-  await upsertUser(need("QA_CUSTOMER_ID"), need("QA_CUSTOMER_PASS"), { firstName: "QA Customer", role: "USER" });
+  // An active subscription is what a paying customer has; checkout refuses customers without one.
+  await upsertUser(need("QA_CUSTOMER_ID"), need("QA_CUSTOMER_PASS"), { firstName: "QA Customer", role: "USER", subscription: "active" });
   await upsertUser("qa-staff-a@qa.invalid", "QaStaffA#2026", { firstName: "QA Staff A", role: "ADMIN_MERCHANT", merchantId: a, createdBy: a });
   await upsertUser("qa-staff-b@qa.invalid", "QaStaffB#2026", { firstName: "QA Staff B", role: "ADMIN_MERCHANT", merchantId: b, createdBy: b });
 

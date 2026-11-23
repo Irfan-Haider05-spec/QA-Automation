@@ -86,3 +86,22 @@ export interface Report {
   fixedIssues: Array<{ project: string; title: string; severity: Severity; target: string; fixedAt: string }>;
 }
 export interface ReportShare { id: string; scopeType: "project" | "client"; scopeId: string; scopeName: string; from: string; to: string; expiresAt: string; revokedAt: string | null; viewCount: number; lastViewedAt: string | null; createdAt: string; createdBy: string | null }
+
+export type UatStatus = "untested" | "passed" | "failed" | "blocked";
+export type UatReleaseStatus = "open" | "signed_off" | "rejected";
+export interface UatRelease {
+  id: string; name: string; description: string | null; status: UatReleaseStatus;
+  decidedBy: string | null; decidedByName: string | null; decidedAt: string | null; decisionNote: string | null;
+  createdBy: string | null; createdByName: string | null; createdAt: string; updatedAt: string;
+  counts: { total: number; untested: number; passed: number; failed: number; blocked: number };
+}
+/** A scenario name from the project's uploaded runs with its latest result. */
+export interface UatScenario { name: string; status: "passed" | "failed" | "skipped"; tags: string[]; runId: string; at: string }
+export interface UatCriterion {
+  id: string; position: number; title: string; steps: string | null; scenario: string | null; status: UatStatus; note: string | null;
+  evidenceRunId: string | null; evidenceRunStatus: RunStatus | null; evidenceRunAt: string | null;
+  testedBy: string | null; testedByName: string | null; testedAt: string | null; updatedAt: string;
+  /** Latest uploaded result of the linked scenario (automated evidence), if any. */
+  automatedStatus: "passed" | "failed" | "skipped" | null; automatedRunId: string | null; automatedAt: string | null;
+}
+

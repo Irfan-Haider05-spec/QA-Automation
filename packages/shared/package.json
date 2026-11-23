@@ -6,7 +6,8 @@
   "description": "Types and zod schemas shared by the engine, the platform API and the dashboard",
   "exports": {
     ".": "./src/index.ts",
-    "./http": "./src/http.ts"
+    "./http": "./src/http.ts",
+    "./browser": "./src/browser.ts"
   },
   "dependencies": {
     "zod": "^4.6.7"

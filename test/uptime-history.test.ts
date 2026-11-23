@@ -4,7 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import type { AddressInfo } from 'node:net';
@@ -196,5 +196,10 @@ test('uptime-export CLI prints a JSON page and refuses paths outside the working
   const out = execFileSync(process.execPath, ['--import', tsx, cli, 'uptime-export', '--file', 'j.jsonl', '--limit', '2'], { cwd, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } });
   const page = JSON.parse(out);
   assert.equal(page.total, 5); assert.equal(page.records.length, 2); assert.ok(page.nextCursor);
-  assert.throws(() => execFileSync(process.execPath, ['--import', tsx, cli, 'uptime-export', '--file', '../x.jsonl'], { cwd, stdio: 'pipe' }));
+  for (const [args, message] of [[['--file', '../x.jsonl'], /relative \.jsonl path/], [['--file', 'missing.jsonl'], /missing\.jsonl not found/]] as const) {
+    const r = spawnSync(process.execPath, ['--import', tsx, cli, 'uptime-export', ...args], { cwd, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } });
+    assert.equal(r.status, 2, 'a usage error exits 2 with a message, not a crash');
+    assert.match(r.stderr, message);
+    assert.doesNotMatch(r.stderr, /\n\s+at /, 'no stack trace');
+  }
 });

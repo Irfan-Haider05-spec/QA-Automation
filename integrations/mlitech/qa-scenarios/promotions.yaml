@@ -1,0 +1,168 @@
+# MLITech promotions: the merchant's promotion lifecycle and its business rules.
+# Written against loyalty-backend-code (src/app/modules/merchant/promotionMerchant).
+# Every scenario here writes data, so it runs only where allowMutations and disposable are
+# on (the PR job's throwaway database), never on staging.
+#
+# The backend reads promotion fields from a JSON string in `data` (the dashboards send
+# multipart form data); a JSON body with the same `data` string is accepted too.
+version: 1
+scenarios:
+  - name: Merchant promotion lifecycle (create, read, update, pause, delete)
+    tags: [smoke, regression, uat]
+    account: merchantA
+    severity: high
+    vars: { title: "QA promo {{unique}}" }
+    steps:
+      - name: merchant profile
+        request: { method: GET, path: /api/v1/user/profile }
+        expect: { status: 200, json: [{ path: $.data.role, equals: MERCHANT }] }
+        save: { merchantId: $.data._id }
+      - name: create
+        request:
+          method: POST
+          path: /api/v1/promo-merchant
+          json: { data: '{"name":"{{title}}","discountPercentage":15,"promotionType":"seasonal","customerSegment":"all_customer","startDate":"2026-01-01","endDate":"2030-12-31","grossValue":200}' }
+        expect:
+          status: [200, 201]
+          maxMs: 3000
+          json:
+            - { path: $.success, equals: true }
+            - { path: $.data.name, equals: "{{title}}" }
+            - { path: $.data.discountPercentage, equals: 15 }
+            - { path: $.data.grossValue, equals: 200 }
+            - { path: $.data.status, equals: active }
+            - { path: $.data.merchantId, equals: "{{merchantId}}" }
+          schema:
+            type: object
+            required: [success, data]
+            properties:
+              data:
+                type: object
+                required: [_id, cardId, name, startDate, endDate, merchantId]
+                properties:
+                  _id: { type: string, format: objectid }
+                  startDate: { type: string, format: date-time }
+                  endDate: { type: string, format: date-time }
+        save: { promoId: $.data._id }
+      - name: read back
+        request: { method: GET, path: "/api/v1/promo-merchant/{{promoId}}" }
+        expect:
+          status: 200
+          json:
+            - { path: $.data.name, equals: "{{title}}" }
+            - { path: $.data.discountPercentage, equals: 15 }
+      - name: stored for this merchant
+        db:
+          collection: promotionmerchants
+          filter: { _id: { $oid: "{{promoId}}" }, merchantId: { $oid: "{{merchantId}}" }, discountPercentage: 15, status: active }
+          expect: { count: 1 }
+      - name: update the discount
+        request: { method: PATCH, path: "/api/v1/promo-merchant/{{promoId}}", json: { data: '{"discountPercentage":25}' } }
+        expect: { status: 200, json: [{ path: $.data.discountPercentage, equals: 25 }, { path: $.data.name, equals: "{{title}}" }] }
+      - name: pause
+        request: { method: PATCH, path: "/api/v1/promo-merchant/toggle/{{promoId}}" }
+        expect: { status: 200 }
+      - name: paused in the database
+        db:
+          collection: promotionmerchants
+          filter: { _id: { $oid: "{{promoId}}" }, status: inactive, discountPercentage: 25 }
+          expect: { count: 1 }
+      - name: delete
+        request: { method: DELETE, path: "/api/v1/promo-merchant/{{promoId}}" }
+        expect: { status: [200, 204] }
+      - name: gone
+        db:
+          collection: promotionmerchants
+          filter: { _id: { $oid: "{{promoId}}" } }
+          expect: { count: 0 }
+    cleanup:
+      - request: { method: DELETE, path: "/api/v1/promo-merchant/{{promoId}}" }
+        expect: { status: [200, 204, 404] }
+
+  - name: Another merchant cannot change or delete a merchant's promotion
+    tags: [regression, security, uat]
+    severity: critical
+    vars: { title: "QA owned promo {{unique}}" }
+    steps:
+      - name: merchant A creates
+        account: merchantA
+        request:
+          method: POST
+          path: /api/v1/promo-merchant
+          json: { data: '{"name":"{{title}}","discountPercentage":15,"promotionType":"seasonal","customerSegment":"all_customer","startDate":"2026-01-01","endDate":"2030-12-31","grossValue":200}' }
+        expect: { status: [200, 201] }
+        save: { promoId: $.data._id }
+      - name: merchant B tries to raise the discount
+        account: merchantB
+        request: { method: PATCH, path: "/api/v1/promo-merchant/{{promoId}}", json: { data: '{"discountPercentage":99}' } }
+        expect: { status: [403, 404] }
+      - name: merchant B tries to delete it
+        account: merchantB
+        request: { method: DELETE, path: "/api/v1/promo-merchant/{{promoId}}" }
+        expect: { status: [403, 404] }
+      - name: unchanged
+        db:
+          collection: promotionmerchants
+          filter: { _id: { $oid: "{{promoId}}" }, discountPercentage: 15 }
+          expect: { count: 1 }
+    cleanup:
+      - account: merchantA
+        request: { method: DELETE, path: "/api/v1/promo-merchant/{{promoId}}" }
+        expect: { status: [200, 204, 404] }
+
+  - name: A promotion cannot end before it starts
+    tags: [regression, uat]
+    account: merchantA
+    severity: high
+    steps:
+      - request:
+          method: POST
+          path: /api/v1/promo-merchant
+          json: { data: '{"name":"QA reversed dates {{unique}}","discountPercentage":10,"promotionType":"seasonal","customerSegment":"all_customer","startDate":"2030-12-31","endDate":"2030-01-01","grossValue":100}' }
+        expect: { status: [400, 422], json: [{ path: $.success, equals: false }] }
+
+  - name: A discount must be between 0 and 100 percent
+    tags: [regression, uat]
+    account: merchantA
+    severity: high
+    steps:
+      - request:
+          method: POST
+          path: /api/v1/promo-merchant
+          json: { data: '{"name":"QA 150 percent {{unique}}","discountPercentage":150,"promotionType":"seasonal","customerSegment":"all_customer","startDate":"2026-01-01","endDate":"2030-12-31","grossValue":100}' }
+        expect: { status: [400, 422], json: [{ path: $.success, equals: false }] }
+
+  - name: A promotion value cannot be negative
+    tags: [regression, uat]
+    account: merchantA
+    severity: high
+    steps:
+      - request:
+          method: POST
+          path: /api/v1/promo-merchant
+          json: { data: '{"name":"QA negative value {{unique}}","discountPercentage":10,"promotionType":"seasonal","customerSegment":"all_customer","startDate":"2026-01-01","endDate":"2030-12-31","grossValue":-5}' }
+        expect: { status: [400, 422], json: [{ path: $.success, equals: false }] }
+
+  - name: A VIP-only promotion is refused to a new customer with a client error
+    tags: [regression, uat]
+    severity: medium
+    vars: { title: "QA VIP promo {{unique}}" }
+    steps:
+      - name: merchant A creates a VIP promotion
+        account: merchantA
+        request:
+          method: POST
+          path: /api/v1/promo-merchant
+          json: { data: '{"name":"{{title}}","discountPercentage":20,"promotionType":"loyalty","customerSegment":"vip_customer","startDate":"2026-01-01","endDate":"2030-12-31","grossValue":100}' }
+        expect: { status: [200, 201] }
+        save: { promoId: $.data._id }
+      - name: a new customer tries to add it
+        account: customer
+        request: { method: POST, path: /api/v1/add-promotion/add, json: { promotionId: "{{promoId}}" } }
+        expect:
+          status: [400, 403, 409, 422]
+          json: [{ path: $.success, equals: false }, { path: $.message, matches: "segment" }]
+    cleanup:
+      - account: merchantA
+        request: { method: DELETE, path: "/api/v1/promo-merchant/{{promoId}}" }
+        expect: { status: [200, 204, 404] }

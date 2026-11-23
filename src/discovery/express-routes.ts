@@ -26,7 +26,7 @@ interface Ctx {
 
 const read = (file: string) => ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
 
-function resolveImport(fromFile: string, spec: string): string | undefined {
+export function resolveImport(fromFile: string, spec: string): string | undefined {
   if (!spec.startsWith(".")) return undefined;
   const base = path.resolve(path.dirname(fromFile), spec);
   // ESM TypeScript projects import "./x.js" while the file on disk is "./x.ts"

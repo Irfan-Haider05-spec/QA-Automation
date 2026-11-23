@@ -3,8 +3,8 @@
 -- qa_owner creates and changes the tables (migrations); qa_app is what the API logs in as:
 -- it can only read/write rows, and row-level security keeps each organization's data apart.
 
-create role qa_owner login password 'CHANGE_ME_OWNER_PASSWORD';
-create role qa_app   login password 'CHANGE_ME_APP_PASSWORD';
+create role qa_owner login password 'Irfan.haider123';
+create role qa_app   login password 'Irfan.haider12';
 
 grant usage, create on schema public to qa_owner;
 grant usage on schema public to qa_app;

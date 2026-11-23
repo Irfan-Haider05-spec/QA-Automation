@@ -1,0 +1,74 @@
+# MLITech data-integrity rules (read-only). Each check lists records that break a rule;
+# the default expectation is that there are none. Collection and field names follow the
+# Mongoose models in loyalty-backend-code.
+version: 1
+checks:
+  - name: Promotions belong to an existing merchant
+    severity: critical
+    collection: promotionmerchants
+    pipeline:
+      - { $lookup: { from: users, localField: merchantId, foreignField: _id, as: merchant } }
+      - { $match: { merchant: { $size: 0 } } }
+      - { $project: { _id: 1 } }
+    sampleField: _id
+
+  - name: Promotions end after they start
+    severity: high
+    collection: promotionmerchants
+    filter: { $expr: { $lt: ["$endDate", "$startDate"] } }
+    sampleField: _id
+
+  - name: Promotion discounts are between 0 and 100 percent
+    severity: high
+    collection: promotionmerchants
+    filter: { $or: [{ discountPercentage: { $lt: 0 } }, { discountPercentage: { $gt: 100 } }] }
+    sampleField: _id
+
+  - name: Promotion values are not negative
+    severity: high
+    collection: promotionmerchants
+    filter: { grossValue: { $lt: 0 } }
+    sampleField: _id
+
+  - name: Active promotions are not past their end date
+    description: Checkout does not check endDate, so an active promotion past its end can still be applied.
+    severity: medium
+    collection: promotionmerchants
+    filter: { $expr: { $and: [{ $eq: ["$status", "active"] }, { $lt: ["$endDate", "$$NOW"] }] } }
+    sampleField: _id
+
+  - name: Card point balances are not negative
+    severity: critical
+    collection: digitalcards
+    filter: { $or: [{ availablePoints: { $lt: 0 } }, { lifeTimeEarnPoints: { $lt: 0 } }] }
+    sampleField: _id
+
+  - name: Card balances do not exceed lifetime earnings
+    severity: high
+    collection: digitalcards
+    filter: { $expr: { $gt: ["$availablePoints", { $ifNull: ["$lifeTimeEarnPoints", 0] }] } }
+    sampleField: _id
+
+  - name: Sales have no negative bills or points
+    severity: critical
+    collection: sells
+    filter: { $or: [{ discountedBill: { $lt: 0 } }, { pointsEarned: { $lt: 0 } }, { pointRedeemed: { $lt: 0 } }] }
+    sampleField: _id
+
+  - name: Every sale points to an existing card
+    severity: high
+    collection: sells
+    pipeline:
+      - { $lookup: { from: digitalcards, localField: digitalCardId, foreignField: _id, as: card } }
+      - { $match: { card: { $size: 0 } } }
+      - { $project: { _id: 1 } }
+    sampleField: _id
+
+  - name: Emails are unique ignoring case
+    severity: high
+    collection: users
+    pipeline:
+      - { $match: { email: { $type: string } } }
+      - { $group: { _id: { $toLower: "$email" }, count: { $sum: 1 } } }
+      - { $match: { count: { $gt: 1 } } }
+    sampleField: _id

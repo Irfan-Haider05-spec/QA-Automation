@@ -52,6 +52,15 @@ export async function ingestRun(q: Query, projectId: string, apiKeyId: string | 
       "insert into plugin_results (org_id, run_id, plugin, status, reason, duration_ms, stats, finding_count) values (app_org(), $1, $2, $3, $4, $5, $6, $7)",
       [runId, pr.plugin, pr.status, pr.reason ?? null, pr.durationMs, pr.stats ? JSON.stringify(pr.stats) : null, pr.findings.length],
     );
+    if (pr.cases?.length) {
+      // One statement per check: names, outcomes and tags of every scenario it ran.
+      await q(
+        `insert into run_cases (org_id, project_id, run_id, plugin, name, status, tags, duration_ms)
+         select app_org(), $1, $2, $3, x.name, x.status, coalesce(array(select jsonb_array_elements_text(x.tags)), '{}'), x.ms
+         from jsonb_to_recordset($4::jsonb) as x(name text, status text, tags jsonb, ms integer)`,
+        [projectId, runId, pr.plugin, JSON.stringify(pr.cases.map((c) => ({ name: c.name, status: c.status, tags: c.tags ?? [], ms: c.ms ?? null })))],
+      );
+    }
     for (const f of pr.findings) {
       if (seen.has(f.fingerprint)) continue;
       seen.add(f.fingerprint);

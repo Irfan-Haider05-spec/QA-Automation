@@ -1,0 +1,102 @@
+# MLITech accounts and access: sign-up, verification and who may use which routes.
+# Written against loyalty-backend-code (user, auth and userManagement modules).
+version: 1
+scenarios:
+  # Read-only: also safe on staging.
+  - name: Each role reaches its own home data
+    tags: [smoke, regression]
+    severity: high
+    steps:
+      - name: merchant profile
+        account: merchantA
+        request: { method: GET, path: /api/v1/user/profile }
+        expect: { status: 200, maxMs: 2000, json: [{ path: $.data.role, equals: MERCHANT }, { path: $.data.password, exists: false }] }
+      - name: customer cards
+        account: customer
+        request: { method: GET, path: /api/v1/add-promotion/my-digital-cards }
+        expect: { status: 200, maxMs: 2000, json: [{ path: $.success, equals: true }] }
+      - name: admin user list
+        account: admin
+        request: { method: GET, path: /api/v1/usermanagement }
+        expect: { status: 200, maxMs: 3000 }
+
+  - name: Customers cannot open merchant management routes
+    tags: [smoke, regression, security]
+    account: customer
+    severity: high
+    steps:
+      - name: all merchant users
+        request: { method: GET, path: /api/v1/usermanagement/merchants/all-users }
+        expect: { status: 403 }
+      - name: merchants for admins
+        request: { method: GET, path: /api/v1/admin/merchants }
+        expect: { status: 403 }
+
+  # The rest write data: only with allowMutations and disposable.
+  - name: Customer signs up, verifies the email code and logs in
+    tags: [regression, uat]
+    severity: high
+    vars: { email: "qa-signup-{{unique}}@qa.invalid", password: "QaSignup#2026x" }
+    steps:
+      - name: sign up
+        account: null
+        request: { method: POST, path: /api/v1/user, json: { firstName: QA Signup, email: "{{email}}", phone: "+999{{uniqueDigits}}", password: "{{password}}", role: USER } }
+        expect: { status: [200, 201], json: [{ path: $.success, equals: true }] }
+      - name: login before verifying is refused
+        account: null
+        request: { method: POST, path: /api/v1/auth/login, json: { identifier: "{{email}}", password: "{{password}}", device: user } }
+        expect: { status: [400, 401, 403], json: [{ path: $.message, matches: "[Vv]erify" }] }
+      - name: read the emailed code (test database only)
+        db:
+          collection: users
+          filter: { email: "{{email}}", verified: false }
+          expect: { count: 1, json: [{ path: "$[0].authentication.emailOTP.code", type: number }] }
+        save: { code: "$[0].authentication.emailOTP.code" }
+      - name: verify the email
+        account: null
+        request: { method: POST, path: /api/v1/auth/verify-email, json: { email: "{{email}}", oneTimeCode: "{{code}}" } }
+        expect: { status: 200, json: [{ path: $.success, equals: true }] }
+      - name: login works
+        account: null
+        request: { method: POST, path: /api/v1/auth/login, json: { identifier: "{{email}}", password: "{{password}}", device: user } }
+        expect: { status: 200, json: [{ path: $.data.accessToken, type: string }, { path: $.data.user.role, equals: USER }] }
+
+  - name: Sign-up cannot set verified, subscription or points
+    tags: [regression, security]
+    severity: critical
+    vars: { email: "qa-mass-{{unique}}@qa.invalid", password: "QaMass#2026x" }
+    steps:
+      - name: sign up with protected fields in the body
+        account: null
+        request:
+          method: POST
+          path: /api/v1/user
+          json: { firstName: QA Mass, email: "{{email}}", phone: "+999{{uniqueDigits}}", password: "{{password}}", role: USER, verified: true, subscription: active, points: 99999 }
+        expect: { status: [200, 201, 400, 422] }
+      - name: the account still needs verification
+        account: null
+        request: { method: POST, path: /api/v1/auth/login, json: { identifier: "{{email}}", password: "{{password}}", device: user } }
+        expect: { status: [400, 401, 403] }
+      - name: nothing protected was stored
+        db:
+          collection: users
+          filter: { email: "{{email}}", $or: [{ verified: true }, { subscription: active }, { points: { $gt: 0 } }] }
+          expect: { count: 0 }
+
+  - name: Creating an admin requires a signed-in super admin
+    tags: [regression, security]
+    severity: critical
+    vars: { email: "qa-intruder-{{unique}}@qa.invalid" }
+    steps:
+      - name: anonymous request with a complete body
+        account: null
+        request:
+          method: POST
+          path: /api/v1/user/create-admin
+          json: { name: QA Intruder, firstName: QA Intruder, email: "{{email}}", password: "QaIntruder#2026", role: SUPER_ADMIN, customUserId: "QA-{{unique}}" }
+        expect: { status: [401, 403, 404] }
+      - name: no admin was created
+        db:
+          collection: users
+          filter: { email: "{{email}}" }
+          expect: { count: 0 }

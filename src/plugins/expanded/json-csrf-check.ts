@@ -7,7 +7,7 @@ import { chromium, type BrowserContext, type Page } from 'playwright';
 import type { RunContext } from '../../core/context.js';
 import type { Finding } from '../../core/types.js';
 import { login } from '../../web/crawler.js';
-import { chromiumLaunchOptions } from '../../web/browser-options.js';
+import { bounded, chromiumLaunchOptions } from '../../web/browser-options.js';
 import { issue, localPath } from './support.js';
 import { assertStateRequiresAuth, readState } from './csrf-check.js';
 
@@ -188,7 +188,7 @@ export async function checkJsonCsrf(ctx: RunContext, c: Case): Promise<Finding[]
       await delivery.stop();
       if (!outcome.status) throw new Inconclusive(`The attack request was not delivered${outcome.failure ? ` (${outcome.failure})` : ''}`);
       if (outcome.environmentBlocked.length) throw new Inconclusive('The browser withheld cookies for reasons outside the application (for example blocked third-party cookies)');
-      await attackPage.close();
+      await bounded(attackPage.close(), 5000);
     }
     if (blocked) throw new Inconclusive('External dependencies were blocked');
 
@@ -219,5 +219,5 @@ export async function checkJsonCsrf(ctx: RunContext, c: Case): Promise<Finding[]
   } catch (error) {
     const why = error instanceof Inconclusive ? error.message : 'browser or page error';
     throw new Error(`JSON CSRF probe incomplete during ${phase} (${why}); check isolated state, cookie login, app page, CSRF header and dependencies`);
-  } finally { await browser.close(); }
+  } finally { await bounded(browser.close(), 15000); }
 }

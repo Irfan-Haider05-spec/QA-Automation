@@ -31,10 +31,10 @@ export type UptimeRecord = z.output<typeof uptimeRecordSchema>;
 export const CLOCK_SKEW_MS = 5 * 60_000;
 const MAX_LINE_BYTES = 4096;
 
-/** Resolve a store path that must stay inside `root` and end in .jsonl. */
-export function resolveStorePath(root: string, relative: string): string {
-  if (path.isAbsolute(relative) || relative.split(/[\\/]/).includes("..") || !relative.endsWith(".jsonl")) {
-    throw new Error("History path must be a relative .jsonl path inside the configuration directory");
+/** Resolve a store path that must stay inside `root` and end in `ext` (.jsonl by default). */
+export function resolveStorePath(root: string, relative: string, ext = ".jsonl"): string {
+  if (path.isAbsolute(relative) || relative.split(/[\\/]/).includes("..") || !relative.endsWith(ext)) {
+    throw new Error(`History path must be a relative ${ext} path inside the configuration directory`);
   }
   const base = path.resolve(root), full = path.resolve(base, relative);
   if (!full.startsWith(base + path.sep)) throw new Error("History path escapes the configuration directory");
@@ -67,7 +67,8 @@ export function readHistory<T>(file: string, schema: z.ZodType<T>, maxBytes: num
   return records.sort((a, b) => Date.parse(at(a)) - Date.parse(at(b)));
 }
 
-async function withLock<T>(file: string, fn: () => T): Promise<T> {
+/** Run `fn` while holding an exclusive `<file>.lock`; a lock older than two minutes is treated as abandoned. */
+export async function withLock<T>(file: string, fn: () => T): Promise<T> {
   const lock = `${file}.lock`;
   for (let attempt = 0; ; attempt++) {
     let fd: number | undefined;
@@ -98,14 +99,19 @@ export async function appendHistory<T>(file: string, schema: z.ZodType<T>, addit
       .slice(-retention.maxEntries);
     const body = merged.map(r => JSON.stringify(r)).join("\n") + (merged.length ? "\n" : "");
     if (Buffer.byteLength(body) > retention.maxBytes) throw new Error("Pruned history still exceeds its size limit; lower maxEntries");
-    const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-    try {
-      const fd = fs.openSync(tmp, "wx", 0o600);
-      try { fs.writeSync(fd, body); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-      fs.renameSync(tmp, file);
-    } catch (e) { try { fs.unlinkSync(tmp); } catch { /* not created */ } throw new Error("History file could not be written"); }
+    writeFileAtomic(file, body);
     return merged;
   });
+}
+
+/** Replace `file` with `body` via a private temporary file and rename, so readers never see a partial file. */
+export function writeFileAtomic(file: string, body: string): void {
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    const fd = fs.openSync(tmp, "wx", 0o600);
+    try { fs.writeSync(fd, body); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, file);
+  } catch { try { fs.unlinkSync(tmp); } catch { /* not created */ } throw new Error("History file could not be written"); }
 }
 
 export interface TargetSummary {
