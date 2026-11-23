@@ -1,5 +1,19 @@
 # VeriQ validation and fixes
 
+## CI typecheck fix: optional MySQL driver — 23 November 2026
+
+GitHub's self-test failed at `npm run typecheck`: `test/db-checks.test.ts` imported
+`mysql2/promise` by name. `mysql2` is optional and is not in `package.json`; the engine loads
+it with a computed name in `src/core/db.ts`. The sandbox had it installed without saving
+(for the real-server test), which hid the error. The test now loads it the same way as the
+engine.
+
+This time the fix was checked the way CI runs it. The repository was copied without
+`node_modules`, installed with `npm ci` from the user's own `package-lock.json` (no `mysql2`,
+no `mongoose`), then the engine, API, runner and dashboard typechecks, the GitHub Action
+simulation and the self-test were run: all passed. With a real MariaDB server the MySQL test
+still passes (6 of 6); without one it is skipped as before.
+
 ## Live MLITech acceptance, scenario lint, Newman reports and UAT evidence — 19 November 2026
 
 ### How the live run was set up

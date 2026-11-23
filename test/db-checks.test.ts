@@ -132,7 +132,10 @@ test('Real PostgreSQL server: same rules, server statement timeout, password nev
 });
 
 test('Real MySQL/MariaDB server: same rules with ? parameters, READ ONLY transaction, statement time limit', { skip: process.env.QA_TEST_MYSQL_URL ? false : 'set QA_TEST_MYSQL_URL to a disposable MySQL database (needs the mysql2 package)' }, async () => {
-  const mysql = await import('mysql2/promise');
+  // mysql2 is optional and not a project dependency (like in src/core/db.ts): a computed
+  // specifier keeps the typecheck from requiring it; the test itself is skipped without a server.
+  const driver = 'mysql2/promise';
+  const mysql = await import(driver);
   const c = await mysql.createConnection({ uri: process.env.QA_TEST_MYSQL_URL!, multipleStatements: false });
   try {
     for (const t of ['promotions', 'merchants', 'audit']) await c.query(`DROP TABLE IF EXISTS ${t}`);
