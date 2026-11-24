@@ -17,7 +17,10 @@
  *                                                        comment, "QA gate" commit status, step outputs
  *                                                        (GITHUB_TOKEN; QA_GITHUB_COMMENT/QA_GITHUB_STATUS=false to skip)
  *   qa plugins                                           list available plugins
- *   qa init                                              write a safe starter config (never overwrite)
+ *   qa init [--backend-dir <dir> | --openapi <file>] [--project <name>] [--ci] [--action <owner/repo@ref>]
+ *                                                        set VeriQ up on a project: finds the Express routes, login
+ *                                                        route and roles, writes qa.config.ts, .env.qa.example and
+ *                                                        (with --ci) a pull-request workflow; never overwrites
  *   qa flow-import --app <name> --name <flow> --url <base> --out <file.mjs>
  *                                                        convert Playwright Test source from stdin; never overwrite
  *   qa uptime-export --file <history.jsonl> [--from ISO] [--to ISO] [--target "GET /health"]
@@ -50,6 +53,7 @@ import { importRoutes } from "./discovery/import.js";
 import { loadPlugins } from "./core/plugin-sdk.js";
 import { buildOpenApi } from "./discovery/openapi.js";
 import { PLUGINS, pluginByName } from "./plugins/index.js";
+import { analyseProject, detectBackend, writeProjectFiles } from "./core/init-project.js";
 import { convertRecording } from "./core/record-flow.js";
 import { startRecorderSession } from "./core/recorder-session.js";
 import type { Suite } from "./core/types.js";
@@ -89,6 +93,10 @@ const { values: opt, positionals } = parseArgs({
     outcome: { type: "string" },
     limit: { type: "string" },
     cursor: { type: "string" },
+    openapi: { type: "string" },
+    project: { type: "string" },
+    ci: { type: "boolean", default: false },
+    action: { type: "string" },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -340,11 +348,26 @@ function cmdPlugins() {
   return 0;
 }
 
-function cmdInit() {
-  const file = path.resolve(opt.config!);
-  const source = `// VeriQ: edit the URL, API document and dedicated QA account below.\nexport default {\n  project: "My project",\n  backend: false,\n  discovery: { format: "openapi", file: "./openapi.json" },\n  target: { baseUrl: process.env.QA_BASE_URL, requestsPerMinute: 60 },\n  login: { path: "/auth/login", tokenPath: "accessToken" },\n  accounts: {},\n  allowMutations: false,\n  disposable: false,\n  pluginSettings: {},\n  suites: { local: ["api-smoke", "data-exposure", "validation-coverage"] },\n};\n`;
-  fs.writeFileSync(file, source, { flag: "wx" });
-  log.info(`Created ${file}. Supply an OpenAPI document and QA_BASE_URL; see docs/PLUGINS.md.`);
+async function cmdInit() {
+  const workDir = process.cwd();
+  if (opt["backend-dir"] && opt.openapi) throw new Error("init takes --backend-dir or --openapi, not both");
+  // Without either: use this folder when it holds an Express backend, otherwise an OpenAPI starter.
+  let backendDir = opt["backend-dir"];
+  if (!backendDir && !opt.openapi) { try { detectBackend(workDir); backendDir = "."; } catch { /* no Express backend here */ } }
+  const project = opt.project ?? path.basename(path.resolve(backendDir ?? workDir));
+  const setup = await analyseProject({ project, backendDir, openapi: opt.openapi, workDir });
+  const action = opt.action ?? "YOUR-ORG/qa-agent@v1";
+  const result = writeProjectFiles(setup, { configFile: opt.config!, workDir, ci: !!opt.ci, action });
+  if (setup.backend) {
+    log.info(`Backend: ${setup.backend.dir} (routes ${setup.backend.routesIndex}, prefix "${setup.backend.apiPrefix}")`);
+    log.info(`Found ${setup.routes.length} routes, roles ${setup.roles.join(", ") || "none"}, login ${setup.login?.path ?? "not found"}, ${setup.publicRoutes.length} without auth, ${setup.mongooseModels} Mongoose models`);
+  } else log.info(`No backend source: the starter reads routes from ${setup.openapi}`);
+  for (const w of setup.warnings) log.warn(w);
+  for (const f of result.written) log.info(`Created ${path.relative(workDir, f) || f}`);
+  for (const f of result.skipped) log.warn(`Kept existing ${path.relative(workDir, f)} (not overwritten)`);
+  if (result.gitignore) log.info(`Added to .gitignore: ${result.gitignore.join(", ")}`);
+  if (opt.ci && !opt.action) log.warn("Replace YOUR-ORG/qa-agent@v1 in .github/workflows/veriq.yml with your VeriQ repository and tag");
+  log.info("Next: review the lines marked CHECK, copy .env.qa.example to .env.qa and fill it in, then run: qa run --suite pr");
   return 0;
 }
 

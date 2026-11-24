@@ -23,7 +23,7 @@
     "test:action": "tsx test/action-sim.ts",
     "runner:start": "npm start -w @qa/runner",
     "runner:test": "npm test -w @qa/runner",
-    "test:expanded": "node --import tsx --test test/expanded.test.ts test/expanded-browser.test.ts test/record-flow.test.ts test/k6-execution.test.ts test/mobsf-execution.test.ts test/session-lifecycle.test.ts test/webhook-contract.test.ts test/fuzz-report.test.ts test/password-policy.test.ts test/uptime-history.test.ts test/error-source.test.ts test/evidence.test.ts test/diff-coverage.test.ts test/code-quality.test.ts test/flaky-tests.test.ts test/mongo-indexes.test.ts test/log-hygiene.test.ts test/target-health.test.ts test/api-scenarios.test.ts test/db-checks.test.ts test/injection-probes.test.ts test/cors-probes.test.ts test/triage.test.ts test/mongo-live.test.ts test/scenario-lint.test.ts test/junit-newman.test.ts"
+    "test:expanded": "node --import tsx --test test/expanded.test.ts test/expanded-browser.test.ts test/record-flow.test.ts test/k6-execution.test.ts test/mobsf-execution.test.ts test/session-lifecycle.test.ts test/webhook-contract.test.ts test/fuzz-report.test.ts test/password-policy.test.ts test/uptime-history.test.ts test/error-source.test.ts test/evidence.test.ts test/diff-coverage.test.ts test/code-quality.test.ts test/flaky-tests.test.ts test/mongo-indexes.test.ts test/log-hygiene.test.ts test/target-health.test.ts test/api-scenarios.test.ts test/db-checks.test.ts test/injection-probes.test.ts test/cors-probes.test.ts test/triage.test.ts test/mongo-live.test.ts test/scenario-lint.test.ts test/junit-newman.test.ts test/init-project.test.ts"
   },
   "engines": {
     "node": ">=20"

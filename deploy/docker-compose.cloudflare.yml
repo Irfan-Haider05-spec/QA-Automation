@@ -1,0 +1,13 @@
+# Add-on for docker-compose.yml when Cloudflare's proxy (orange cloud) is on for DOMAIN.
+# Turn it on once in .env (then every `docker compose` command uses both files):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.cloudflare.yml
+# Needs certs/cloudflare-origin.pem and certs/cloudflare-origin.key (DIGITALOCEAN.md, step 9).
+services:
+  caddy:
+    volumes:
+      - ./Caddyfile.cloudflare:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
+
+  api:
+    environment:
+      TRUST_PROXY: 3 # Cloudflare → caddy → nginx → api

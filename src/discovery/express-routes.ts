@@ -37,9 +37,27 @@ export function resolveImport(fromFile: string, spec: string): string | undefine
   return undefined;
 }
 
+/** `require("./x")` with a literal relative path: the file it loads */
+function requiredFile(sf: ts.SourceFile, e: ts.Expression | undefined): string | undefined {
+  if (!e || !ts.isCallExpression(e) || !ts.isIdentifier(e.expression) || e.expression.text !== "require") return undefined;
+  const [arg] = e.arguments;
+  return arg && ts.isStringLiteralLike(arg) ? resolveImport(sf.fileName, arg.text) : undefined;
+}
+
 function importsOf(sf: ts.SourceFile): Map<string, string> {
   const map = new Map<string, string>();
   for (const st of sf.statements) {
+    // CommonJS: const X = require("./x"), const { A, B } = require("./x"), const X = require("./x").Y
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        const init = d.initializer && ts.isPropertyAccessExpression(d.initializer) ? d.initializer.expression : d.initializer;
+        const target = requiredFile(sf, init);
+        if (!target) continue;
+        if (ts.isIdentifier(d.name)) map.set(d.name.text, target);
+        else if (ts.isObjectBindingPattern(d.name)) for (const el of d.name.elements) if (ts.isIdentifier(el.name)) map.set(el.name.text, target);
+      }
+      continue;
+    }
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
     const target = resolveImport(sf.fileName, st.moduleSpecifier.text);
     if (!target || !st.importClause) continue;
@@ -236,7 +254,7 @@ export function discoverRoutes(opts: { backendDir: string; routesIndex: string; 
   if (!fs.existsSync(indexFile)) throw new Error(`Routes index not found: ${indexFile}`);
   const sf = read(indexFile);
   const imports = importsOf(sf);
-  const mounts: Array<{ path: string; ident: string }> = [];
+  const mounts: Array<{ path: string; ident: string; file?: string }> = [];
 
   const visit = (n: ts.Node) => {
     // { path: "/x", route: XRoutes }
@@ -249,23 +267,37 @@ export function discoverRoutes(opts: { backendDir: string; routesIndex: string; 
       }
       if (p !== undefined && r) mounts.push({ path: p, ident: r });
     }
-    // router.use("/x", XRoutes)
+    // router.use("/x", XRoutes) or router.use("/x", require("./x"))
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "use") {
       const [first, second] = n.arguments;
       if (first && second && ts.isStringLiteralLike(first) && ts.isIdentifier(second)) mounts.push({ path: first.text, ident: second.text });
+      else if (first && second && ts.isStringLiteralLike(first)) {
+        const file = requiredFile(sf, second);
+        if (file) mounts.push({ path: first.text, ident: "", file });
+      }
     }
     ts.forEachChild(n, visit);
   };
   visit(sf);
 
   for (const m of mounts) {
-    const file = imports.get(m.ident);
+    const file = m.file ?? imports.get(m.ident);
     if (!file) {
       ctx.warnings.push(`routes index: cannot resolve import for ${m.ident}`);
       continue;
     }
-    parseRouterFile(file, joinPath(opts.apiPrefix, m.path), moduleNameFor(file, opts.backendDir), ctx, importedName(sf, m.ident));
+    parseRouterFile(file, joinPath(opts.apiPrefix, m.path), moduleNameFor(file, opts.backendDir), ctx, m.file ? undefined : importedName(sf, m.ident));
   }
+  // Small apps declare routes in the index itself (router.get("/login", ...)): read those too.
+  const indexRouters = routerVars(sf);
+  let declaresRoutes = false;
+  const findDirect = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression)
+      && indexRouters.has(n.expression.expression.text) && METHODS.has(n.expression.name.text)) declaresRoutes = true;
+    if (!declaresRoutes) ts.forEachChild(n, findDirect);
+  };
+  findDirect(sf);
+  if (declaresRoutes) parseRouterFile(indexFile, opts.apiPrefix || "/", "index", ctx);
 
   // App-level routes (health check etc.)
   if (opts.appFile) {
@@ -294,6 +326,8 @@ export function discoverRoutes(opts: { backendDir: string; routesIndex: string; 
 
   const prefix = opts.apiPrefix.replace(/\/$/, "");
   for (const r of ctx.routes) r.apiPath = r.path.startsWith(prefix + "/") ? r.path.slice(prefix.length) : r.path;
+  // A router reached both from a mount and from the index's own parse is read once: both
+  // paths use the same file, mount and export, which parseRouterFile records as visited.
   return { routes: ctx.routes, warnings: ctx.warnings };
 }
 

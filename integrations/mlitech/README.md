@@ -11,11 +11,20 @@ Files in this folder go into **tmhdigital/loyalty-backend-code**:
 | `qa-mobile/` | `qa-mobile/` | Maestro flows for the customer app (rename the `.example`; needs a device or emulator and Semantics labels in the Flutter widgets) |
 | `qa.yml` | `.github/workflows/qa.yml` | PR checks on a throwaway backend, checks after every staging deploy, nightly full run |
 
+These stay in the qa-agent repository (the workflows run them from there):
+
+| File here | What it does |
+|---|---|
+| `seed-ci.ts` | Seeds the four QA accounts and some tenant data into the PR job's throwaway MongoDB; refuses any non-local host |
+| `qa.local.config.ts` | The same checks run **by hand from the qa-agent folder**: `node bin/qa.mjs run -c integrations/mlitech/qa.local.config.ts --suite staging`, with a `.env.qa` in the qa-agent folder (template: `.env.qa.example` here; `QA_BACKEND_DIR` relative to the qa-agent folder) |
+| `qa-without-platform.yml` | The CI workflow for use without the platform (reports as workflow artifacts, accounts as repository secrets) |
+| `known-issues.json` | Accepted findings for the local config |
+
 Setup takes about 30 minutes once the platform is running.
 
 ## 1. Platform (once)
 
-1. Deploy the platform: [`deploy/README.md`](../../deploy/README.md). Say it ends up at `https://qa.mlitech.com`.
+1. Deploy the platform: [`deploy/DIGITALOCEAN.md`](../../deploy/DIGITALOCEAN.md) (one DigitalOcean server). Say it ends up at `https://veriq.tmhdigital.com`.
 2. Sign up first: that account owns the platform. Organization name: **MLITech**. Everyone else joins by invite (**Members → Invite**).
 
 ## 2. Project and staging environment
@@ -38,15 +47,16 @@ Setup takes about 30 minutes once the platform is running.
 
 ## 3. API key
 
-**Project → API keys → New key**: name `loyalty-backend CI`, tick **Read test accounts**. Copy it now; it's shown once.
+**Project → API keys → New key**: name `loyalty-backend CI`, tick **Can read test-account passwords**. Copy it now; it's shown once.
 
 ## 4. GitHub (loyalty-backend-code → Settings → Secrets and variables → Actions)
 
 | Kind | Name | Value |
 |---|---|---|
 | Secret | `QA_PLATFORM_API_KEY` | the key from step 3 |
-| Secret | `QA_AGENT_TOKEN` | fine-grained token with read access to `tmhdigital/qa-agent` (only while that repo is private) |
-| Variable | `QA_PLATFORM_URL` | the platform's API address: `https://qa.mlitech.com` with the one-server setup, `https://api.qa.mlitech.com` when the dashboard is on Cloudflare Pages |
+| Secret | `QA_AGENT_TOKEN` | fine-grained token with read access to the VeriQ repository (only if that repository is private) |
+| Variable | `QA_AGENT_REPO` | the VeriQ repository, if it is not `Irfan-Haider05-spec/QA-Automation` |
+| Variable | `QA_PLATFORM_URL` | the platform's address: `https://veriq.tmhdigital.com` with the one-server setup (the API is on the same address), the API's own address when the dashboard is on Cloudflare Pages |
 | Variable | `QA_PLATFORM_ENV` | the staging environment ID |
 | Variable | `QA_STAGING_URL` | the staging backend URL |
 | Variable | `QA_CORS_ORIGINS` | staging dashboard origins, comma-separated |
@@ -69,7 +79,7 @@ Run against this backend locally on a throwaway MongoDB 8.3 replica set (19 Nove
 Fix what's quick, then accept the rest so only **new** problems block PRs:
 
 ```bash
-# in loyalty-backend-code, with tmhdigital/qa-agent checked out next to it
+# in loyalty-backend-code, with the VeriQ repository checked out next to it as ../qa-agent
 node ../qa-agent/bin/qa.mjs run -c qa.config.ts --suite pr --baseline
 git add qa-known-issues.json && git commit -m "QA baseline"
 ```
@@ -113,6 +123,6 @@ product owner, then fix the code, or change the scenario if the rule is differen
 
 ## What each trigger does
 
-- **Pull request**: builds the PR's backend, starts MongoDB (single-node replica set, for transactions) and Redis, seeds the four QA accounts with `seed/seed-ci.ts`, boots the API and tests the routes the PR touches, including write requests (the database is thrown away). One comment on the PR that updates on every push, a **QA gate** status, and the run on the platform.
+- **Pull request**: builds the PR's backend, starts MongoDB (single-node replica set, for transactions) and Redis, seeds the four QA accounts with `seed-ci.ts` (kept in the qa-agent repository), boots the API and tests the routes the PR touches, including write requests (the database is thrown away). One comment on the PR that updates on every push, a **QA gate** status, and the run on the platform.
 - **Push to `staging`**: waits until Render serves the new build, records the deployment on the platform, then tests staging read-only with the accounts from the platform.
 - **Nightly (02:41 PKT)**: everything, including fuzzing and the dashboard crawl, accessibility and visual checks.

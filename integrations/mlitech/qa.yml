@@ -12,9 +12,10 @@
 #   nightly        the full suite against staging, including fuzzing and dashboards.
 #
 # Repository settings (Settings → Secrets and variables → Actions):
-#   Secrets    QA_PLATFORM_API_KEY  project API key (Send runs + Read test accounts)
-#              QA_AGENT_TOKEN       read-only token for tmhdigital/qa-agent (only while it is private)
-#   Variables  QA_PLATFORM_URL      e.g. https://qa.mlitech.com
+#   Secrets    QA_PLATFORM_API_KEY  project API key with "Can read test-account passwords"
+#              QA_AGENT_TOKEN       read-only token for the VeriQ repository (only if it is private)
+#   Variables  QA_AGENT_REPO        the VeriQ repository (default Irfan-Haider05-spec/QA-Automation)
+#              QA_PLATFORM_URL      e.g. https://veriq.tmhdigital.com
 #              QA_PLATFORM_ENV      ID of the staging environment (platform → project → Environments)
 #              QA_STAGING_URL       e.g. https://rewaldo-staging.onrender.com
 #              QA_CORS_ORIGINS      staging dashboard origins, comma-separated
@@ -43,7 +44,7 @@ permissions:
   statuses: write # the "QA gate" commit status
 
 env:
-  QA_AGENT_REF: v1 # tag or branch of tmhdigital/qa-agent
+  QA_AGENT_REF: v1 # tag or branch of the VeriQ repository
 
 jobs:
   # ───────────────────────────── PR: throwaway backend ─────────────────────────
@@ -95,7 +96,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: tmhdigital/qa-agent
+          repository: ${{ vars.QA_AGENT_REPO || 'Irfan-Haider05-spec/QA-Automation' }}
           ref: ${{ env.QA_AGENT_REF }}
           token: ${{ secrets.QA_AGENT_TOKEN || github.token }}
           path: .qa-agent
@@ -125,7 +126,7 @@ jobs:
         working-directory: .qa-agent
         run: |
           npm ci --omit=dev --no-audit --no-fund -w @qa/shared --include-workspace-root
-          node --import tsx seed/seed-ci.ts --uri "$DATABASE_URL"
+          node --import tsx integrations/mlitech/seed-ci.ts --uri "$DATABASE_URL"
 
       # Two instances sharing MongoDB and Redis, like the PM2 cluster in production:
       # the realtime checks expect an event to reach the user's socket on both.
@@ -175,7 +176,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: tmhdigital/qa-agent
+          repository: ${{ vars.QA_AGENT_REPO || 'Irfan-Haider05-spec/QA-Automation' }}
           ref: ${{ env.QA_AGENT_REF }}
           token: ${{ secrets.QA_AGENT_TOKEN || github.token }}
           path: .qa-agent

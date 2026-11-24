@@ -24,7 +24,8 @@ Some checks wrap external report formats; registration alone is not test coverag
 > credentials vault, runs, issues). See [apps/api/README.md](apps/api/README.md).
 > The engine below uploads runs to it with `--upload`.
 
-A plugin-first QA agent originally built for the MLITech backend. It finds routes
+A plugin-first QA agent for any web API and its dashboards (first used on a loyalty-platform
+backend; that setup is kept as an example in `integrations/mlitech/`). It finds routes
 in Express source or imports OpenAPI/Postman definitions, selects checks, runs them
 against the configured API and web apps, triages
 the results and posts one report with a pass/fail gate.
@@ -60,15 +61,30 @@ discover routes (TS AST) → select by git diff → run plugins → triage → r
 | `mobile` | mobile | Maestro flows (`qa-mobile/*.yaml`) on a device or emulator for the Flutter apps: each failed flow with Maestro's message and screenshot; account logins reach the flows as variables. Skipped when Maestro or a device isn't available |
 | `web-visual` | dashboard | Screenshot of every page compared with an approved baseline (pixel diff image in the report) |
 
-## Quick start (local)
+## Quick start: apply VeriQ to a project
+
+This repository is the product only. It holds no project's configuration in its root:
+each project gets its own `qa.config.ts`, which `qa init` writes for you.
 
 ```bash
-npm ci
-cp .env.qa.example .env.qa              # fill in staging URL + QA account credentials
-npm run -s qa -- discover               # writes qa-out/routes.json + qa-out/openapi.json
-npm run -s qa -- run --suite local      # static + live checks
+npm ci                                                   # in this folder (Node 20 or newer)
+cd ../your-project                                       # the project to test
+node ../qa-agent/bin/qa.mjs init --ci --action YOUR-ORG/qa-agent@v1
+#   finds the Express routes, the login route and the roles, and writes:
+#   qa.config.ts         review the lines marked CHECK
+#   .env.qa.example      variable names only; copy to .env.qa and fill in (never commit .env.qa)
+#   .github/workflows/veriq.yml   source checks on every pull request (with --ci)
+#   .gitignore           gains .env.qa and qa-out/
+node ../qa-agent/bin/qa.mjs run --suite pr               # source checks, no server needed
+node ../qa-agent/bin/qa.mjs run --suite staging          # live, read-only, needs QA_BASE_URL and the accounts
 open qa-out/report.html
 ```
+
+`init` never overwrites a file. Without Express source it writes an OpenAPI-based starter
+(`--openapi openapi.json`). Routes that are public by nature (login, health, webhooks) are
+accepted; every other route without auth is listed as a commented suggestion, so it stays
+reported until someone decides. A complete worked example for a real backend, with business
+scenarios, data checks and CI, is in [`integrations/mlitech/`](integrations/mlitech/README.md).
 
 Useful flags:
 
@@ -158,44 +174,22 @@ dashboard behind nginx, automatic HTTPS with Caddy, and the optional hosted runn
 Accounts are invite-only by default (`SIGNUP_MODE`). See [`deploy/README.md`](deploy/README.md)
 for setup, backups and upgrades.
 
-## Setting it up in CI (MLITech backend)
+## Setting it up in CI
 
-**With the platform (recommended):** follow [`integrations/mlitech/README.md`](integrations/mlitech/README.md).
-It adds `qa.config.ts` and `.github/workflows/qa.yml` to the backend repo; test-account
-passwords stay on the platform and every run shows up in the dashboard.
-
-**Without the platform** (reports as workflow artifacts only):
-
-1. **Push this folder as its own repo**, e.g. `tmhdigital/qa-agent`. Its own workflow
-   (`.github/workflows/selftest.yml`) checks that the agent still catches every planted
-   bug in `test/fixture-api`.
-2. **Create four QA accounts on staging** through the normal app flows: two merchants
-   (two separate businesses), one customer, one admin. Use them for nothing else:
-   the backend keeps one session per user, so a person using these accounts gets
-   logged out on every agent run.
-3. **Add repo settings to `Loyalty-Backend-Code`** (Settings → Secrets and variables → Actions):
-   - Variables: `QA_AGENT_REPO`, `QA_STAGING_URL`, `QA_CORS_ORIGINS`, and for dashboards
-     `QA_ADMIN_WEB_URL`, `QA_BUSINESS_WEB_URL` (optional `QA_ADMIN_WEB_LOGIN`, `QA_BUSINESS_WEB_LOGIN`)
-   - Secrets: `QA_MERCHANT_A_ID/PASS`, `QA_MERCHANT_B_ID/PASS`, `QA_CUSTOMER_ID/PASS`, `QA_ADMIN_ID/PASS`,
-     and `QA_AGENT_TOKEN` (read-only PAT) if the qa-agent repo is private
-4. **Copy `workflows/backend-qa-agent.yml`** to `Loyalty-Backend-Code/.github/workflows/qa-agent.yml`.
-   Change `branches: [staging]` under `push` if Render deploys staging from another branch.
-5. **Make it required**: once the baseline is in (next section), add the `pr` job as a
-   required check in the branch protection rule for `main`.
-
-What each trigger does:
-
-- **Pull request:** builds the PR's backend, starts MongoDB (single-node replica set,
-  needed for transactions) and Redis, seeds QA data with `seed/seed-ci.ts`, boots the API
-  and runs the `pr` suite on the routes the PR touches. Mutating checks are allowed
-  because the database is thrown away. The result is posted as a single PR comment that
-  updates on every push.
-- **Push to staging:** waits until Render serves the new build (`wait-for --fresh`
-  compares the process uptime), then runs the `staging` suite (API checks + dashboard
-  crawl). It sends read-only requests with real tokens.
-- **Nightly (02:41 PKT):** the full suite against staging, including fuzzing, load smoke,
-  the passive security scan (full OWASP ZAP in Docker), Lighthouse, business flows,
-  accessibility and visual diffs.
+- **Any project:** `qa init --ci` writes `.github/workflows/veriq.yml`, which runs the `pr`
+  suite (source checks) on every pull request through this repository's GitHub Action.
+  Live suites after a deploy are added the same way with `suite: staging` and the
+  `base-url` input, with the QA accounts as repository secrets.
+- **With the platform:** the dashboard's **CI setup** tab generates the workflow, and
+  test-account passwords stay in the platform's vault.
+- **Worked example:** [`integrations/mlitech/`](integrations/mlitech/README.md) has the full
+  setup for one real backend: a pull-request job on a throwaway MongoDB with seeded QA
+  accounts (`seed-ci.ts`), checks after each staging deploy, a nightly run, business
+  scenarios and data checks, with and without the platform.
+- This repository's own workflow (`.github/workflows/selftest.yml`) tests VeriQ itself on
+  `test/fixture-api`, a fake backend with planted bugs. Its report is titled "VeriQ self-test:
+  planted bugs (the gate must fail)": a failed gate there means every planted bug was found,
+  and the workflow passes.
 
 ## Dashboards (Phase 2)
 
@@ -277,7 +271,7 @@ Fix the critical findings before you baseline. Don't baseline them.
 - Requests are throttled under the backend limiter (120/min/IP); 429s are retried
   after `Retry-After`.
 - The fuzzer skips `/auth/`, logout, delete, webhooks and payment callbacks.
-- `seed/seed-ci.ts` refuses to run against any non-local MongoDB host.
+- The MLITech example's `integrations/mlitech/seed-ci.ts` refuses to run against any non-local MongoDB host.
 - Tokens are redacted in every report (`Bearer $QA_TOKEN_MERCHANTB`).
 - Response evidence never prints binary bodies or file downloads: an Excel, PDF or
   ZIP export is shown as `[Binary response not shown: Excel workbook (.xlsx), 18.3 KB…]`

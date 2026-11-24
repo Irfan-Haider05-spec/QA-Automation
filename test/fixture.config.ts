@@ -1,7 +1,7 @@
 /** Config for the self-test fixture API (test/fixture-api). Not used in production. */
 import { defineConfig } from "../src/core/config.js";
 export default defineConfig({
-  project: "Fixture API (self-test)",
+  project: "VeriQ self-test: planted bugs (the gate must fail)",
   backend: { dir: "./fixture-api", routesIndex: "src/app/routes/index.ts", appFile: "src/app.ts", apiPrefix: "/api/v1", healthPath: "/health", envExample: ".env.example", modulesDir: "src/app/modules" },
   target: { baseUrl: process.env.QA_BASE_URL ?? "http://127.0.0.1:4010", requestsPerMinute: 1200, timeoutMs: 8000, slowMs: 2000 },
   accounts: {

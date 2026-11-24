@@ -1,5 +1,49 @@
 # VeriQ validation and fixes
 
+## Generic product and `qa init` — 23 November 2026
+
+**Why:** the root `qa.config.ts`, `seed/seed-ci.ts`, `workflows/backend-qa-agent.yml` and
+`known-issues.json` were MLITech's, so the repository looked like it was testing one project.
+They moved to `integrations/mlitech/` (`qa.local.config.ts`, `seed-ci.ts`,
+`qa-without-platform.yml`, `known-issues.json`, `.env.qa.example`); paths inside them were
+adjusted to their new folder. The root `.env.qa.example` now lists generic names only.
+
+**Self-test report "Gate failed":** this is the intended result. `test/fixture-api` has
+planted bugs and the workflow asserts that the gate fails (`exit-code` 1). The report title
+now says so: "VeriQ self-test: planted bugs (the gate must fail)".
+
+**`qa init`** (new, `src/core/init-project.ts`, `test/init-project.test.ts`, 5 tests):
+
+| Check | Result |
+|---|---|
+| CommonJS app (`require`, routes declared in the index, mounted `require("./x")`) | 7 routes, each found once; login body field `username` taken from the handler |
+| Fixture backend: generated config loaded and run | `POST /admin/create-admin` still reported critical, the open export reported |
+| Existing `.env.qa.example`, second `init`, CRLF `.gitignore` | file kept, config not overwritten (exit 2), one `.gitignore` addition in the file's own line endings |
+| No backend | OpenAPI starter; `--backend-dir` with `--openapi` exits 2; placeholder action gets a CHECK comment |
+| MLITech backend (`ac766c4`) | 202 routes, 9 roles, 13 routes public by nature; `create-admin` and exports left in the review list; generated config ran with 176 findings, 17 blocking |
+
+Mutation check: accepting every open route as public, removing `require()` resolution, and
+overwriting existing files each made the init tests fail (2, 2 and 1 failures); the code was
+restored and the hashes compared.
+
+**Root causes fixed during development:** the first `init` accepted every unauthenticated
+route as public, which would have hidden critical findings (now only login, health,
+webhooks and similar are accepted); the generated config skipped the MongoDB and log checks
+because they need a `pluginSettings` entry (added); discovery missed CommonJS apps (added).
+
+**Runs:**
+
+| Suite | Result |
+|---|---|
+| Engine typecheck and workspaces | passed |
+| `test:expanded` with real PostgreSQL 16, MariaDB 10.11 and MongoDB 8.3.7 | 211 tests: 207 passed, 2 skipped (k6 and MobSF prerequisites), 2 failed (Firefox and WebKit cannot be installed in this sandbox, unchanged; the download is blocked) |
+| `selftest`, `test:action` | all checks passed |
+| `runner:test` | 13 passed |
+| API on PGlite and on real PostgreSQL (RLS roles) | 122 passed each |
+| Clean `npm ci` from the user's `package-lock.json`, then typecheck, `test:action`, `selftest`, init tests | all passed |
+
+Dashboard code was not changed in this round.
+
 ## CI typecheck fix: optional MySQL driver — 23 November 2026
 
 GitHub's self-test failed at `npm run typecheck`: `test/db-checks.test.ts` imported
@@ -21,7 +65,7 @@ still passes (6 of 6); without one it is skipped as before.
 The MLITech backend (`tmhdigital/loyalty-backend-code`, commit `ac766c4`) was built with
 `npm run build` and started twice (ports 5004 and 5005, one Redis), on MongoDB 8.3.7 started
 as a single-node replica set. MongoDB came from the conda-forge package (a package
-registry); Docker Hub is blocked here. VeriQ's `seed/seed-ci.ts` created the QA accounts
+registry); Docker Hub is blocked here. VeriQ's CI seed (now `integrations/mlitech/seed-ci.ts`) created the QA accounts
 (now with an active customer subscription, which checkout requires), with the environment
 values from `integrations/mlitech/qa.yml`. All data was local and thrown away; nothing was
 sent outside the sandbox. This session's work before a pause had already made this setup;

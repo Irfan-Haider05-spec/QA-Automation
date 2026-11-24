@@ -17,10 +17,18 @@ The default local database persists in `apps/api/.data/`; test suites use dispos
 in-memory databases. No cloud service is required for this local setup.
 
 1. `npm ci` (Node 20 or newer).
-2. Copy `examples/veriq.config.ts` to the target project's `qa.config.ts`, or run
-   `npm run qa -- init -c <new-config-path>`; init refuses to overwrite files.
-3. Export OpenAPI 3.0/3.1 or a Postman 2.1 collection. Configure `discovery.file`
-   relative to the config. Use `backend: false` if there is no Express source.
+2. In the target project's folder run `node <path-to-veriq>/bin/qa.mjs init`
+   (`--backend-dir <dir>` when the backend is elsewhere, `--ci` for a pull-request
+   workflow). It reads an Express backend in TypeScript or JavaScript (ES imports or
+   `require`, routes mounted from a routes index or declared in it), finds the API
+   prefix, the login route and its identifier field, the roles and the routes without
+   auth, and writes `qa.config.ts`, `.env.qa.example` and optionally
+   `.github/workflows/veriq.yml`. It adds `.env.qa` and `qa-out/` to `.gitignore` and
+   never overwrites a file. Only routes public by nature (login, health, webhooks,
+   verification) go into `publicRoutes`; the other open routes are commented
+   suggestions and stay reported. `examples/veriq.config.ts` shows every option.
+3. Without Express source: export OpenAPI 3.0/3.1 or a Postman 2.1 collection and run
+   `init --openapi <file>` (`backend: false`, `discovery.file` relative to the config).
 4. Configure the deployment URL and dedicated QA accounts using environment
    variables. Keep mutations disabled for the first live run.
 5. Run `npm run qa -- discover -c <config>` and inspect the route inventory.

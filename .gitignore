@@ -16,5 +16,7 @@ qa-out-dashboard/
 .env
 deploy/.env
 deploy/certs/*.crt
+deploy/certs/*.pem
+deploy/certs/*.key
 .sync/
 deploy/backups/

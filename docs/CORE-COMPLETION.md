@@ -462,6 +462,22 @@ steps and mongo-indexes live mode against the real server.
 - `mongo-indexes`: indexes MongoDB can never build (unsupported `partialFilterExpression`
   operators) and declared indexes missing from the live database.
 
+## Chunk 8f: a generic product, applied per project
+
+- The repository root holds no project's configuration any more. The MLITech setup (local
+  config, CI seed, the workflow without the platform, its `.env.qa.example` and known issues)
+  moved to `integrations/mlitech/`, next to the files that go into the MLITech repository.
+- `qa init` sets VeriQ up on any project: it reads an Express backend (TypeScript or
+  JavaScript, ES imports or CommonJS `require`, routes in the index or mounted from it),
+  finds the API prefix, health path, login route and its body field, roles and open routes,
+  and writes `qa.config.ts`, `.env.qa.example` and, with `--ci`, a pull-request workflow.
+  Without Express source it writes an OpenAPI starter. It never overwrites a file; only
+  routes public by nature are accepted, the other open routes stay reported.
+- Route discovery now reads CommonJS apps (`require`, `router.use("/x", require("./x"))`,
+  routes declared in the routes index itself).
+- The self-test report is titled "VeriQ self-test: planted bugs (the gate must fail)": its
+  failed gate is the expected result.
+
 Still open for the core: Chunk 2 (a recorder session with a person), Chunk 3 (MobSF:
 server, APK and key unavailable), the run against the deployed staging, and a full run on
 Windows. The core is not claimed 100% complete.

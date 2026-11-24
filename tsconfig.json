@@ -14,9 +14,8 @@
   },
   "include": [
     "src/**/*.ts",
-    "qa.config.ts",
     "test/**/*.ts",
-    "seed/**/*.ts"
+    "integrations/**/*.ts"
   ],
   "exclude": [
     "test/fixture-api/**",

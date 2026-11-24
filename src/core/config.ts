@@ -296,7 +296,7 @@ export async function loadConfig(
   overrides: Partial<{ baseUrl: string; backendDir: string; allowMutations: boolean; platformAccounts: PlatformAccount[] }>,
 ): Promise<{ config: QaConfig; configDir: string; fromPlatform: string[] }> {
   const abs = path.resolve(configPath);
-  if (!fs.existsSync(abs)) throw new Error(`Config file not found: ${abs}`);
+  if (!fs.existsSync(abs)) throw new Error(`Config file not found: ${abs}. To set VeriQ up on this project run: qa init`);
   const mod = await import(pathToFileURL(abs).href);
   const user: UserConfig = mod.default ?? mod;
   const config: QaConfig = {

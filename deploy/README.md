@@ -15,6 +15,7 @@ Internet ──► caddy (HTTPS, Let's Encrypt) ──► dashboard (nginx: app 
 - **caddy**: gets and renews the HTTPS certificate for your domain.
 - **runner** (profile `hosted`): runs hosted checks and schedules. Leave it off if you only send runs from GitHub Actions.
 
+Step-by-step on one DigitalOcean Droplet with a Cloudflare-managed domain (the current setup): [`DIGITALOCEAN.md`](DIGITALOCEAN.md).
 Step-by-step setup with Supabase (database), an Oracle VM (API) and Cloudflare Pages (dashboard): [`SETUP-GUIDE.md`](SETUP-GUIDE.md).
 Dashboard on Cloudflare Pages and API + PostgreSQL on your server: [`CLOUDFLARE.md`](CLOUDFLARE.md).
 
@@ -75,8 +76,8 @@ With `SMTP_URL` set, people reset their own password from the login page and con
 ## Connecting a project (GitHub Actions)
 
 1. In the dashboard: create a project, add the staging environment, verify the domain, add test accounts.
-2. **Project → API keys**: create a key with *Send runs* (and *Read test accounts* if CI should use the accounts stored here).
-3. In the GitHub repository: secret `QA_PLATFORM_KEY` = the key, variable `QA_PLATFORM_URL` = `https://<DOMAIN>`.
+2. **Project → API keys**: create a key (every key can send runs; tick *Can read test-account passwords* if CI should use the accounts stored here).
+3. In the GitHub repository: secret `QA_PLATFORM_API_KEY` = the key, variable `QA_PLATFORM_URL` = `https://<DOMAIN>`.
 4. **Project → CI** shows the workflow file to add, filled in for that project.
 
 ## Backups
@@ -115,7 +116,7 @@ Take a backup before upgrading. Migrations only move forward; to roll back, rest
 | `[api] Invalid configuration: …` | A value in `.env` is missing or too short; the message names it. |
 | `[db] N migration(s) not applied` | The migrate service failed: `docker compose logs migrate`. |
 | Browser warns about the certificate | DNS doesn't point at this server yet, or ports 80/443 are closed. `docker compose logs caddy`. |
-| Everyone gets "Too many requests" together | Another proxy (e.g. Cloudflare) sits in front of Caddy: raise `TRUST_PROXY` in `docker-compose.yml` by one. |
+| Everyone gets "Too many requests" together | Cloudflare's proxy (orange cloud) is on without the add-on: use `docker-compose.cloudflare.yml` (DIGITALOCEAN.md, step 9), which trusts Cloudflare's addresses and sets `TRUST_PROXY=3`. |
 | Hosted runs stay "Waiting" | The runner isn't started (`--profile hosted`), or its `RUNNER_TOKEN` differs from the API's. |
 | Changing `POSTGRES_PASSWORD` / `QA_APP_PASSWORD` later has no effect | They're applied only when the database volume is first created. Change them inside Postgres (`alter role … password …`) and then in `.env`. |
 
