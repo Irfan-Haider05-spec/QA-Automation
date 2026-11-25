@@ -45,8 +45,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # Root + the shared workspace the engine imports. Dev dependencies stay in: the fixture API
-      # needs express and socket.io. The action then runs its own production-only install.
+
       - run: npm ci --no-audit --no-fund -w @qa/shared --include-workspace-root
       - name: Start the fixture API (planted bugs)
         run: |
