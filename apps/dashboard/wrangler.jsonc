@@ -1,0 +1,15 @@
+{
+  // VeriQ dashboard on Cloudflare Workers Static Assets (static files, no server code).
+  // Build:  npm ci && npm run build -w @qa/dashboard   (from the repo root)
+  // Deploy: npx wrangler deploy --config apps/dashboard/wrangler.jsonc
+  // Pages (Workers & Pages -> Create -> Pages -> Connect to Git) needs no deploy command
+  // and no this file; this is for the Workers "Deploy command" flow.
+  "name": "veriq-dashboard",
+  "compatibility_date": "2025-01-01",
+  "assets": {
+    // Relative to this file: apps/dashboard/dist (Vite's build output, with its _headers).
+    "directory": "./dist",
+    // Unknown paths (/o/..., /p/...) serve index.html so the SPA router can handle them.
+    "not_found_handling": "single-page-application"
+  }
+}
