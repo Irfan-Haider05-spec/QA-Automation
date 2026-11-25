@@ -29,6 +29,7 @@ import { AuditPage } from "./pages/Audit";
 import { ReportsPage } from "./pages/Reports";
 import { PublicReportPage } from "./pages/PublicReport";
 import { NotificationsPage } from "./pages/Notifications";
+import { GuidePage } from "./pages/Guide";
 import { OrgSettingsPage } from "./pages/OrgSettings";
 import { NotFoundPage, NoOrgPage } from "./pages/NotFound";
 import { PrivacyPage, TermsPage } from "./pages/Legal";
@@ -87,6 +88,7 @@ export function App() {
         <Route path="audit" element={<AuditPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
+        <Route path="guide" element={<GuidePage />} />
         <Route path="settings" element={<OrgSettingsPage />} />
         <Route path="account" element={<AccountPage />} />
         <Route path="*" element={<NotFoundPage />} />

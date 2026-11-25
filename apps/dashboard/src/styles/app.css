@@ -377,3 +377,37 @@ pre.code { margin: 0; background: var(--sunken); border: 1px solid var(--rule); 
 .legal-body ul { padding-left: 20px; }
 .legal-body li { margin: 6px 0; }
 .auth-legal { margin-top: 8px; }
+
+/* Welcome hero on an empty Overview (distinct from the Projects list) */
+.welcome .panel-body { gap: 16px; }
+.welcome h2 { font-size: 20px; }
+.how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.how-step { display: flex; gap: 10px; align-items: flex-start; }
+.how-step p { margin-top: 2px; }
+.how-n { flex: none; width: 24px; height: 24px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font: 600 13px var(--display); display: grid; place-items: center; }
+@media (max-width: 720px) { .how { grid-template-columns: 1fr; } }
+
+/* Help links in the sidebar */
+.rail-help { display: grid; gap: 2px; padding-top: 8px; margin-top: 4px; border-top: 1px solid var(--rule); }
+.rail-help a { display: flex; align-items: center; padding: 7px 10px; border-radius: 6px; color: var(--ink-2); font-weight: 500; }
+.rail-help a:hover { background: var(--sunken); text-decoration: none; }
+.rail-help a.active { background: var(--accent-soft); color: var(--accent); }
+.rail-tour { text-align: left; border: 0; background: transparent; color: var(--muted); font: 500 13.5px var(--body); padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+.rail-tour:hover { background: var(--sunken); color: var(--ink); }
+
+/* Bullet lists in the guide */
+.bullets { margin: 0; padding-left: 20px; display: grid; gap: 7px; }
+.bullets li { line-height: 1.55; }
+.guide .panel-body p { line-height: 1.55; }
+
+/* Product tour */
+.tour-dim, .tour-spot { position: fixed; z-index: 200; }
+.tour-dim { inset: 0; background: rgba(5, 10, 20, 0.55); }
+.tour-spot { border-radius: 8px; box-shadow: 0 0 0 9999px rgba(5, 10, 20, 0.55); transition: top 0.15s ease, left 0.15s ease, width 0.15s ease, height 0.15s ease; }
+.tour-pop { position: fixed; z-index: 201; width: 320px; max-width: calc(100vw - 24px); background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; box-shadow: var(--shadow-pop); padding: 14px 16px; display: grid; gap: 10px; }
+.tour-pop-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.tour-pop-head h3 { font-size: 15px; margin: 0; }
+.tour-pop p { margin: 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.5; }
+.tour-pop-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.icon-btn { border: 0; background: transparent; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px; border-radius: 6px; }
+.icon-btn:hover { color: var(--ink); background: var(--sunken); }

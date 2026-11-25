@@ -5,6 +5,7 @@ import { useCurrentOrg } from "../lib/org";
 import { NotFoundPage } from "../pages/NotFound";
 import { useSignupOptions } from "../api/queries";
 import { api } from "../api/client";
+import { Tour, startTour, tourUnseen } from "../components/Tour";
 
 const ROLE_NAME = { owner: "Owner", admin: "Admin", developer: "Developer", viewer: "Viewer" } as const;
 
@@ -100,6 +101,15 @@ function VerifyBanner() {
 export function AppShell() {
   const { org, orgId, can } = useCurrentOrg();
   useEffect(() => { if (org) { try { localStorage.setItem("qa.lastOrg", org.id); } catch { /* ignore */ } } }, [org]);
+  // Offer the tour once to a brand-new user, after the nav has rendered.
+  const toured = useRef(false);
+  useEffect(() => {
+    // Offer it once; never auto-pop under browser automation (keeps e2e clean).
+    if (!org || toured.current || !tourUnseen() || navigator.webdriver) return;
+    toured.current = true;
+    const t = setTimeout(() => startTour(), 500);
+    return () => clearTimeout(t);
+  }, [org]);
   if (!org) return <div className="main"><NotFoundPage what="organization" /></div>;
   const base = `/o/${orgId}`;
   return (
@@ -108,22 +118,27 @@ export function AppShell() {
         <div className="brand"><Logo /></div>
         <OrgSwitcher />
         <nav>
-          <NavLink to={base} end>Overview</NavLink>
-          <NavLink to={`${base}/projects`}>Projects</NavLink>
-          <NavLink to={`${base}/clients`}>Clients</NavLink>
-          <NavLink to={`${base}/reports`}>Reports</NavLink>
-          <NavLink to={`${base}/notifications`}>Notifications</NavLink>
-          <NavLink to={`${base}/members`}>Members</NavLink>
+          <NavLink to={base} end data-tour="overview">Overview</NavLink>
+          <NavLink to={`${base}/projects`} data-tour="projects">Projects</NavLink>
+          <NavLink to={`${base}/clients`} data-tour="clients">Clients</NavLink>
+          <NavLink to={`${base}/reports`} data-tour="reports">Reports</NavLink>
+          <NavLink to={`${base}/notifications`} data-tour="notifications">Notifications</NavLink>
+          <NavLink to={`${base}/members`} data-tour="members">Members</NavLink>
           {can("audit.read") && <NavLink to={`${base}/audit`}>Audit log</NavLink>}
-          <NavLink to={`${base}/settings`}>Settings</NavLink>
+          <NavLink to={`${base}/settings`} data-tour="settings">Settings</NavLink>
         </nav>
         <div className="spacer" />
+        <div className="rail-help">
+          <NavLink to={`${base}/guide`} data-tour="guide">Integration guide</NavLink>
+          <button type="button" className="rail-tour" onClick={startTour}>Take a tour</button>
+        </div>
         <div className="rail-foot"><UserMenu /></div>
       </aside>
       <main className="main" id="main">
         <VerifyBanner />
         <Outlet />
       </main>
+      <Tour />
     </div>
   );
 }

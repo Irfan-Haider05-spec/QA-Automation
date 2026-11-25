@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
 import { useProjects } from "../api/queries";
 import { useCurrentOrg } from "../lib/org";
-import { Empty, ErrorAlert, Loading, Ribbon, RunStatusLabel, When } from "../components/ui";
+import { ErrorAlert, Loading, Ribbon, RunStatusLabel, When } from "../components/ui";
 import { plural } from "../lib/format";
 import { Onboarding } from "../components/Onboarding";
+import { startTour } from "../components/Tour";
 
 export function OverviewPage() {
   const { orgId, org, can } = useCurrentOrg();
@@ -34,14 +35,22 @@ export function OverviewPage() {
       {q.isLoading ? (
         <Loading />
       ) : !projects.length ? (
-        <div className="panel">
-          <Empty
-            title="No projects yet"
-            action={can("projects.create") ? <Link className="btn primary" to={`/o/${orgId}/projects?new=1`}>Create your first project</Link> : undefined}
-          >
-            A project is one codebase you want tested: its API, dashboards or app.
-          </Empty>
-        </div>
+        <section className="panel welcome" aria-labelledby="welcome-h">
+          <div className="panel-body">
+            <h2 id="welcome-h">Welcome to VeriQ</h2>
+            <p className="muted">VeriQ tests your API and dashboards from the outside — on every pull request, after each staging deploy, and on a schedule — and gathers what it finds here.</p>
+            <div className="how">
+              <div className="how-step"><span className="how-n" aria-hidden="true">1</span><div><b>Connect a project</b><p className="muted small">Point VeriQ at a codebase and its staging environment.</p></div></div>
+              <div className="how-step"><span className="how-n" aria-hidden="true">2</span><div><b>Run the checks</b><p className="muted small">In CI on each pull request and deploy, or on the hosted runner.</p></div></div>
+              <div className="how-step"><span className="how-n" aria-hidden="true">3</span><div><b>Act on the results</b><p className="muted small">Gates block regressions; issues and reports live here.</p></div></div>
+            </div>
+            <div className="btn-row">
+              {can("projects.create") && <Link className="btn primary" to={`/o/${orgId}/projects?new=1`}>Create your first project</Link>}
+              <button type="button" className="btn" onClick={startTour}>Take a tour</button>
+              <Link className="btn" to={`/o/${orgId}/guide`}>Integration guide</Link>
+            </div>
+          </div>
+        </section>
       ) : (
         <section className="panel" aria-label="Project health">
           <div className="health-head" aria-hidden="true">
